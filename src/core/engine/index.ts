@@ -10,6 +10,8 @@ import { DiagnosticGuard } from '../guard/diagnostic.js';
 import { DaemonServer } from '../daemon/server.js';
 import { MemoryStore } from '../memory/store.js';
 import { ReflectionEngine, FeedbackType } from '../memory/reflection.js';
+import { ToolRegistry, createDefaultRegistry, defineTool } from '../tool/index.js';
+import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 
 export interface EngineOptions {
@@ -42,6 +44,9 @@ export class TaskEngine {
     private memoryStore: MemoryStore;
     private reflectionEngine: ReflectionEngine;
 
+    // Tool System
+    private toolRegistry: ToolRegistry;
+
     constructor(llm: ILLMProvider, session: Session, options: EngineOptions = {}) {
         this.llm = llm;
         this.session = session;
@@ -68,6 +73,10 @@ export class TaskEngine {
         // Phase 4 init
         this.memoryStore = new MemoryStore();
         this.reflectionEngine = new ReflectionEngine(this.llm, this.memoryStore);
+
+        // Tool System init: 注册内置工具 + ACI 工具
+        this.toolRegistry = createDefaultRegistry();
+        this.registerAciTools();
     }
 
     private defaultAskUser(question: string): Promise<string> {
@@ -109,8 +118,8 @@ export class TaskEngine {
 
         while (!isDone && retries < this.maxRetries) {
             try {
-                // 将 ACI 基础工具 + 惰性注入的技能工具合并
-                const allTools = [...this.getBaseTools(), ...injection.tools];
+                // 将 ToolRegistry 工具 + 惰性注入的技能工具合并
+                const allTools = [...this.toolRegistry.toStandardTools(), ...injection.tools];
 
                 const prompt: StandardPrompt = {
                     systemPrompt: injection.systemPrompt,
@@ -196,37 +205,57 @@ export class TaskEngine {
         await this.reflectionEngine.onUserFeedback(this.session, feedback);
     }
 
-    // ─── ACI 基础工具（常驻上下文） ───
-    private getBaseTools() {
-        return [
-            {
-                name: 'readFile',
-                description: 'Read file contents with line numbers. Supports pagination via startLine/maxLines.',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        filePath: { type: 'string', description: 'Path to the file relative to workspace root' },
-                        startLine: { type: 'number', description: 'Starting line number (1-indexed), default 1' },
-                        maxLines: { type: 'number', description: 'Max lines to return, default 500' },
-                    },
-                    required: ['filePath'],
-                },
+    // ─── ACI 工具注册到 ToolRegistry ───
+    private registerAciTools(): void {
+        const aci = this.aci;
+        const guard = this.diagnosticGuard;
+        const daemon = this.daemon;
+
+        this.toolRegistry.register(defineTool('readFile', {
+            description: 'Read file contents with line numbers. Supports pagination via startLine/maxLines.',
+            parameters: z.object({
+                filePath: z.string().describe('Path to the file relative to workspace root'),
+                startLine: z.number().describe('Starting line number (1-indexed), default 1').optional(),
+                maxLines: z.number().describe('Max lines to return, default 500').optional(),
+            }),
+            async execute(args) {
+                const res = aci.readFile(args.filePath, args.startLine, args.maxLines);
+                daemon?.broadcast('agent:tool_result', { tool: 'readFile', result: res });
+                return { output: JSON.stringify(res) };
             },
-            {
-                name: 'editFile',
-                description: 'Replace a specific text block in a file. Requires expectedHash from a prior readFile call to prevent conflicts.',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        filePath: { type: 'string' },
-                        expectedHash: { type: 'string', description: 'SHA-256 hash from readFile to guard concurrency' },
-                        searchBlock: { type: 'string', description: 'Exact text to find' },
-                        replaceBlock: { type: 'string', description: 'Replacement text' },
-                    },
-                    required: ['filePath', 'expectedHash', 'searchBlock', 'replaceBlock'],
-                },
+        }));
+
+        this.toolRegistry.register(defineTool('editFile', {
+            description: 'Replace a specific text block in a file. Requires expectedHash from a prior readFile call.',
+            parameters: z.object({
+                filePath: z.string(),
+                expectedHash: z.string().describe('SHA-256 hash from readFile to guard concurrency'),
+                searchBlock: z.string().describe('Exact text to find'),
+                replaceBlock: z.string().describe('Replacement text'),
+            }),
+            async execute(args) {
+                // LSP 诊断拦截
+                const currentContent = aci.readFile(args.filePath);
+                const simulatedContent = currentContent.content.replace(args.searchBlock, args.replaceBlock);
+                const diagnosticResult = guard.checkContent(args.filePath, simulatedContent);
+
+                if (!diagnosticResult.passed) {
+                    const errorMessages = diagnosticResult.diagnostics
+                        .filter(d => d.severity === 'error')
+                        .map(d => `  Line ${d.line}: ${d.message} (${d.code})`)
+                        .join('\n');
+
+                    daemon?.broadcast('agent:error', { tool: 'editFile', diagnostics: diagnosticResult.diagnostics });
+                    return {
+                        output: `Edit REJECTED by diagnostic guard. ${diagnosticResult.errorCount} error(s):\n${errorMessages}\nPlease fix and retry.`,
+                    };
+                }
+
+                aci.editFile(args.filePath, args.expectedHash, args.searchBlock, args.replaceBlock);
+                daemon?.broadcast('agent:tool_result', { tool: 'editFile', success: true });
+                return { output: `Successfully edited ${args.filePath}` };
             },
-        ];
+        }));
     }
 
     private async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -242,43 +271,11 @@ export class TaskEngine {
         }
 
         try {
-            if (name === 'readFile') {
-                const res = this.aci.readFile(
-                    args.filePath as string,
-                    (args.startLine as number) || undefined,
-                    (args.maxLines as number) || undefined
-                );
-                this.daemon?.broadcast('agent:tool_result', { tool: name, result: res });
-                return JSON.stringify(res);
-            }
-
-            if (name === 'editFile') {
-                // ── Phase 3: LSP 诊断拦截 ──
-                const filePath = args.filePath as string;
-                const searchBlock = args.searchBlock as string;
-                const replaceBlock = args.replaceBlock as string;
-
-                // 模拟应用修改后的内容，先做诊断
-                const currentContent = this.aci.readFile(filePath);
-                const simulatedContent = currentContent.content.replace(searchBlock, replaceBlock);
-                const diagnosticResult = this.diagnosticGuard.checkContent(filePath, simulatedContent);
-
-                if (!diagnosticResult.passed) {
-                    const errorMessages = diagnosticResult.diagnostics
-                        .filter(d => d.severity === 'error')
-                        .map(d => `  Line ${d.line}: ${d.message} (${d.code})`)
-                        .join('\n');
-
-                    this.daemon?.broadcast('agent:error', { tool: name, diagnostics: diagnosticResult.diagnostics });
-                    return `Edit REJECTED by diagnostic guard. ${diagnosticResult.errorCount} error(s) found:\n${errorMessages}\nPlease fix the issues and try again.`;
-                }
-
-                this.aci.editFile(filePath, args.expectedHash as string, searchBlock, replaceBlock);
-                this.daemon?.broadcast('agent:tool_result', { tool: name, success: true });
-                return `Successfully edited ${filePath}`;
-            }
-
-            return `Error: Unknown tool "${name}".`;
+            const result = await this.toolRegistry.execute(name, args, {
+                sessionId: this.session.id,
+                workspaceRoot: process.cwd(),
+            });
+            return result.output;
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
             this.daemon?.broadcast('agent:error', { tool: name, error: message });
