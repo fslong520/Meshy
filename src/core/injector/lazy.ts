@@ -18,6 +18,10 @@ import { SubagentRegistry, SubagentConfig } from '../subagents/loader.js';
 import { RoutingDecision } from '../router/intent.js';
 import { Session } from '../session/state.js';
 import { ToolRegistry } from '../tool/registry.js';
+import { ToolPackRegistry } from '../tool/tool-pack.js';
+
+/** ToolRAG Top-K 默认值 */
+const DEFAULT_RAG_TOP_K = 8;
 
 export interface InjectionResult {
     /** 组装后的完整 System Prompt */
@@ -32,21 +36,29 @@ export class LazyInjector {
     private skillRegistry: SkillRegistry;
     private subagentRegistry: SubagentRegistry;
     private toolRegistry: ToolRegistry;
+    private toolPackRegistry: ToolPackRegistry;
 
-    constructor(skillRegistry: SkillRegistry, subagentRegistry: SubagentRegistry, toolRegistry: ToolRegistry) {
+    constructor(
+        skillRegistry: SkillRegistry,
+        subagentRegistry: SubagentRegistry,
+        toolRegistry: ToolRegistry,
+        toolPackRegistry: ToolPackRegistry,
+    ) {
         this.skillRegistry = skillRegistry;
         this.subagentRegistry = subagentRegistry;
         this.toolRegistry = toolRegistry;
+        this.toolPackRegistry = toolPackRegistry;
     }
 
     /**
-     * 根据路由决策和用户输入，动态组装需要注入的工具与 Prompt，并启发式预绑定 ToolCatalog 工具。
+     * 根据路由决策和用户输入，动态组装需要注入的工具与 Prompt。
+     * 工具预绑定流程：ToolPack 确定性匹配 → ToolRAG 模糊检索 → Pin 合并
      */
     public resolve(
         userInput: string,
         decision: RoutingDecision,
         baseSystemPrompt: string,
-        session: Session
+        session: Session,
     ): InjectionResult {
         // 1. 检查是否有 @subagent 显式唤醒
         const { agent, cleanInput } = this.subagentRegistry.resolveAtMention(userInput);
@@ -56,20 +68,34 @@ export class LazyInjector {
 
         // 2. 收集需要注入的技能 (Skills)
         const skillNames = new Set<string>(decision.suggestedSkills);
-
         const searchHits = this.skillRegistry.searchByKeywords(userInput);
         for (const hit of searchHits) {
             skillNames.add(hit.name);
         }
 
-        // 3. 启发式预加载 Lazy Tools (ToolCatalog)
+        // 3. ToolPack 确定性匹配（快速路径，跳过 RAG）
         const catalog = this.toolRegistry.getCatalog();
-        const kw = userInput.toLowerCase();
-        for (const entry of catalog.getAllEntries()) {
-            if (kw.includes(entry.category.toLowerCase()) || kw.includes(entry.id.toLowerCase())) {
-                session.activateTool(entry.id);
-            }
+        const matchedPacks = this.toolPackRegistry.match(
+            userInput,
+            (decision as any).suggestedToolPacks,
+        );
+
+        let ragToolIds: string[] = [];
+
+        if (matchedPacks.length > 0) {
+            // 命中预设包 → 直接批量加载，不走 RAG
+            ragToolIds = this.toolPackRegistry.collectToolIds(matchedPacks);
+        } else if (catalog.getAllEntries().length > DEFAULT_RAG_TOP_K) {
+            // 大规模 Catalog 且无包命中 → ToolRAG BM25 检索
+            const ragIndex = catalog.getRagIndex();
+            ragToolIds = ragIndex.search(userInput, DEFAULT_RAG_TOP_K);
+        } else {
+            // 小规模 Catalog → 全量激活
+            ragToolIds = catalog.getAllEntries().map(e => e.id);
         }
+
+        // 写入 Session（每轮刷新）
+        session.setRagTools(ragToolIds);
 
         // 4. 组装 System Prompt 和 Skill Tools
         const promptParts: string[] = [baseSystemPrompt, decision.systemPromptHint];

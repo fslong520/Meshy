@@ -15,8 +15,16 @@ export class Session {
     public id: string;
     public history: StandardMessage[];
     public blackboard: BlockboardState;
-    /** Current active lazy tools bound to this session */
-    public activatedTools: Set<string>;
+
+    /** LLM/用户显式 pin 的工具（跨轮持久） */
+    public pinnedTools: Set<string>;
+    /** ToolRAG 每轮动态检索的工具（每轮刷新） */
+    public ragSelectedTools: Set<string>;
+
+    /** 兼容属性：返回 pinned + ragSelected 的合集 */
+    public get activatedTools(): Set<string> {
+        return new Set([...this.pinnedTools, ...this.ragSelectedTools]);
+    }
 
     constructor(id: string) {
         this.id = id;
@@ -27,7 +35,8 @@ export class Session {
             openFiles: [],
             lastError: null,
         };
-        this.activatedTools = new Set();
+        this.pinnedTools = new Set();
+        this.ragSelectedTools = new Set();
     }
 
     public addMessage(message: StandardMessage) {
@@ -38,38 +47,43 @@ export class Session {
         this.blackboard = { ...this.blackboard, ...updates };
     }
 
-    private readonly MAX_ACTIVE_TOOLS = 15;
+    // ─── Pinned Tools（持久，跨轮） ───
 
-    public activateTool(toolId: string) {
-        // 先删除再添加，确保它在 Set 中被移到最后（最新）
-        if (this.activatedTools.has(toolId)) {
-            this.activatedTools.delete(toolId);
-        }
-        this.activatedTools.add(toolId);
+    public pinTool(toolId: string) {
+        this.pinnedTools.add(toolId);
+    }
 
-        // LRU 淘汰：超过上限时移除头部最老的元素
-        if (this.activatedTools.size > this.MAX_ACTIVE_TOOLS) {
-            const oldest = this.activatedTools.values().next().value;
-            if (oldest) {
-                this.activatedTools.delete(oldest);
-            }
+    public unpinTool(toolId: string) {
+        this.pinnedTools.delete(toolId);
+    }
+
+    // ─── RAG Selected Tools（每轮刷新） ───
+
+    public setRagTools(toolIds: string[]) {
+        this.ragSelectedTools.clear();
+        for (const id of toolIds) {
+            this.ragSelectedTools.add(id);
         }
     }
 
-    /** LRU: 使用某工具时更新它的新鲜度 */
-    public touchTool(toolId: string) {
-        if (this.activatedTools.has(toolId)) {
-            this.activatedTools.delete(toolId);
-            this.activatedTools.add(toolId);
-        }
+    // ─── 兼容旧接口 ───
+
+    public activateTool(toolId: string) {
+        this.pinnedTools.add(toolId);
     }
 
     public deactivateTool(toolId: string) {
-        this.activatedTools.delete(toolId);
+        this.pinnedTools.delete(toolId);
+        this.ragSelectedTools.delete(toolId);
+    }
+
+    public touchTool(_toolId: string) {
+        // No-op in new architecture; pinned tools persist, RAG tools are per-turn
     }
 
     public clearActivatedTools() {
-        this.activatedTools.clear();
+        this.pinnedTools.clear();
+        this.ragSelectedTools.clear();
     }
 
     /**

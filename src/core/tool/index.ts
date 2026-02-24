@@ -1,14 +1,17 @@
 /**
  * Tool System — Barrel Export
  *
- * 双层架构：
+ * 三层架构：
  * - Built-in 工具（常驻注入 LLM context）
- * - Lazy 工具（按需加载，通过 ToolCatalog + useTool 激活）
+ * - ToolPack 预设包（确定性快速路径）
+ * - ToolRAG + Lazy 工具（按需 BM25 检索 / manageTools 管理）
  */
 
 export { defineTool, type ToolDefinition, type ToolContext, type ToolResult } from './define.js';
 export { ToolRegistry } from './registry.js';
 export { ToolCatalog, type CatalogEntry } from './catalog.js';
+export { ToolRAGIndex, type ToolDocument } from './tool-rag.js';
+export { ToolPackRegistry, createDefaultToolPackRegistry, type ToolPack } from './tool-pack.js';
 export { createManageToolsDefinition } from './manage-tools.js';
 export { zodToJsonSchema } from './schema-util.js';
 
@@ -34,13 +37,12 @@ import { WebSearchTool } from './websearch.js';
 
 /**
  * 创建一个预注册了所有内置工具的 ToolRegistry 实例。
- * 包含 ToolCatalog 和 manageTools 元工具。
+ * 包含 ToolCatalog（内置 ToolRAGIndex）和 manageTools 元工具。
  */
 export function createDefaultRegistry(): ToolRegistry {
-    const catalog = new ToolCatalog();
+    const catalog = new ToolCatalog(); // 自动创建内部 ToolRAGIndex
     const registry = new ToolRegistry(catalog);
 
-    // 注册 9 个 Built-in 常驻工具
     registry.registerAll([
         BashTool,
         WriteTool,
@@ -51,8 +53,9 @@ export function createDefaultRegistry(): ToolRegistry {
         WebSearchTool,
     ]);
 
-    // 注册 manageTools 元工具（用于管理 Catalog 中的按需工具）
-    registry.register(createManageToolsDefinition(catalog));
+    // manageTools 接收 catalog 和 ragIndex
+    registry.register(createManageToolsDefinition(catalog, catalog.getRagIndex()));
 
     return registry;
 }
+

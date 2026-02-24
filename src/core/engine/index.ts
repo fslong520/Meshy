@@ -11,6 +11,7 @@ import { DaemonServer } from '../daemon/server.js';
 import { MemoryStore } from '../memory/store.js';
 import { ReflectionEngine, FeedbackType } from '../memory/reflection.js';
 import { ToolRegistry, createDefaultRegistry, defineTool } from '../tool/index.js';
+import { createDefaultToolPackRegistry } from '../tool/tool-pack.js';
 import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 
@@ -60,7 +61,9 @@ export class TaskEngine {
         this.skillRegistry = new SkillRegistry();
         this.subagentRegistry = new SubagentRegistry();
         this.toolRegistry = createDefaultRegistry();
-        this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry, this.toolRegistry);
+
+        const toolPackRegistry = createDefaultToolPackRegistry();
+        this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry, this.toolRegistry, toolPackRegistry);
         this.skillRegistry.scan();
         this.subagentRegistry.scan();
 
