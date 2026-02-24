@@ -9,7 +9,7 @@
 export { defineTool, type ToolDefinition, type ToolContext, type ToolResult } from './define.js';
 export { ToolRegistry } from './registry.js';
 export { ToolCatalog, type CatalogEntry } from './catalog.js';
-export { createUseToolDefinition } from './use-tool.js';
+export { createManageToolsDefinition } from './manage-tools.js';
 export { zodToJsonSchema } from './schema-util.js';
 
 // Built-in Tools
@@ -23,7 +23,7 @@ export { WebSearchTool } from './websearch.js';
 
 import { ToolRegistry } from './registry.js';
 import { ToolCatalog } from './catalog.js';
-import { createUseToolDefinition } from './use-tool.js';
+import { createManageToolsDefinition } from './manage-tools.js';
 import { BashTool } from './bash.js';
 import { WriteTool } from './write.js';
 import { GlobTool } from './glob.js';
@@ -34,7 +34,7 @@ import { WebSearchTool } from './websearch.js';
 
 /**
  * 创建一个预注册了所有内置工具的 ToolRegistry 实例。
- * 包含 ToolCatalog 和 useTool 元工具。
+ * 包含 ToolCatalog 和 manageTools 元工具。
  */
 export function createDefaultRegistry(): ToolRegistry {
     const catalog = new ToolCatalog();
@@ -51,8 +51,8 @@ export function createDefaultRegistry(): ToolRegistry {
         WebSearchTool,
     ]);
 
-    // 注册 useTool 元工具（用于激活 Catalog 中的按需工具）
-    registry.register(createUseToolDefinition(catalog));
+    // 注册 manageTools 元工具（用于管理 Catalog 中的按需工具）
+    registry.register(createManageToolsDefinition(catalog));
 
     return registry;
 }

@@ -38,8 +38,34 @@ export class Session {
         this.blackboard = { ...this.blackboard, ...updates };
     }
 
+    private readonly MAX_ACTIVE_TOOLS = 15;
+
     public activateTool(toolId: string) {
+        // 先删除再添加，确保它在 Set 中被移到最后（最新）
+        if (this.activatedTools.has(toolId)) {
+            this.activatedTools.delete(toolId);
+        }
         this.activatedTools.add(toolId);
+
+        // LRU 淘汰：超过上限时移除头部最老的元素
+        if (this.activatedTools.size > this.MAX_ACTIVE_TOOLS) {
+            const oldest = this.activatedTools.values().next().value;
+            if (oldest) {
+                this.activatedTools.delete(oldest);
+            }
+        }
+    }
+
+    /** LRU: 使用某工具时更新它的新鲜度 */
+    public touchTool(toolId: string) {
+        if (this.activatedTools.has(toolId)) {
+            this.activatedTools.delete(toolId);
+            this.activatedTools.add(toolId);
+        }
+    }
+
+    public deactivateTool(toolId: string) {
+        this.activatedTools.delete(toolId);
     }
 
     public clearActivatedTools() {

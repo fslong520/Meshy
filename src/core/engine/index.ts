@@ -59,7 +59,8 @@ export class TaskEngine {
         this.router = new IntentRouter();
         this.skillRegistry = new SkillRegistry();
         this.subagentRegistry = new SubagentRegistry();
-        this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry);
+        this.toolRegistry = createDefaultRegistry();
+        this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry, this.toolRegistry);
         this.skillRegistry.scan();
         this.subagentRegistry.scan();
 
@@ -112,7 +113,7 @@ export class TaskEngine {
         if (catalogAdvert) promptParts.push(catalogAdvert);
         const basePrompt = promptParts.join('\n\n');
 
-        const injection = this.injector.resolve(userPrompt, decision, basePrompt);
+        const injection = this.injector.resolve(userPrompt, decision, basePrompt, this.session);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }

@@ -91,13 +91,15 @@ export class ToolRegistry {
         const isActive = ctx.session?.activatedTools.has(name) || false;
 
         if (catalogTool && isActive) {
+            // 刷新 LRU 活跃度
+            ctx.session?.touchTool(name);
             return catalogTool.execute(args, ctx);
         }
 
-        // 如果在 catalog 中但未激活，提示用户先 useTool
+        // 如果在 catalog 中但未激活，提示用户先 manageTools
         if (catalogTool && !isActive) {
             return {
-                output: `Tool "${name}" exists but is not activated. Call useTool("${name}") first to activate it.`,
+                output: `Tool "${name}" exists but is not activated. Call manageTools with action="activate" first.`,
             };
         }
 

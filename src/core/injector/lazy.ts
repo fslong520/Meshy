@@ -16,6 +16,8 @@ import { StandardTool } from '../llm/provider.js';
 import { SkillRegistry } from '../skills/registry.js';
 import { SubagentRegistry, SubagentConfig } from '../subagents/loader.js';
 import { RoutingDecision } from '../router/intent.js';
+import { Session } from '../session/state.js';
+import { ToolRegistry } from '../tool/registry.js';
 
 export interface InjectionResult {
     /** 组装后的完整 System Prompt */
@@ -29,19 +31,22 @@ export interface InjectionResult {
 export class LazyInjector {
     private skillRegistry: SkillRegistry;
     private subagentRegistry: SubagentRegistry;
+    private toolRegistry: ToolRegistry;
 
-    constructor(skillRegistry: SkillRegistry, subagentRegistry: SubagentRegistry) {
+    constructor(skillRegistry: SkillRegistry, subagentRegistry: SubagentRegistry, toolRegistry: ToolRegistry) {
         this.skillRegistry = skillRegistry;
         this.subagentRegistry = subagentRegistry;
+        this.toolRegistry = toolRegistry;
     }
 
     /**
-     * 根据路由决策和用户输入，动态组装需要注入的工具与 Prompt。
+     * 根据路由决策和用户输入，动态组装需要注入的工具与 Prompt，并启发式预绑定 ToolCatalog 工具。
      */
     public resolve(
         userInput: string,
         decision: RoutingDecision,
-        baseSystemPrompt: string
+        baseSystemPrompt: string,
+        session: Session
     ): InjectionResult {
         // 1. 检查是否有 @subagent 显式唤醒
         const { agent, cleanInput } = this.subagentRegistry.resolveAtMention(userInput);
@@ -49,17 +54,24 @@ export class LazyInjector {
             return this.buildSubagentInjection(agent, baseSystemPrompt);
         }
 
-        // 2. 收集需要注入的技能
+        // 2. 收集需要注入的技能 (Skills)
         const skillNames = new Set<string>(decision.suggestedSkills);
 
-        // 同时用用户输入做启发式关键词搜索
-        // 修改：移除硬编码限制 slice(0, 3)，将所有命中结果全部抛出
         const searchHits = this.skillRegistry.searchByKeywords(userInput);
         for (const hit of searchHits) {
             skillNames.add(hit.name);
         }
 
-        // 3. 组装 System Prompt 和 Tools
+        // 3. 启发式预加载 Lazy Tools (ToolCatalog)
+        const catalog = this.toolRegistry.getCatalog();
+        const kw = userInput.toLowerCase();
+        for (const entry of catalog.getAllEntries()) {
+            if (kw.includes(entry.category.toLowerCase()) || kw.includes(entry.id.toLowerCase())) {
+                session.activateTool(entry.id);
+            }
+        }
+
+        // 4. 组装 System Prompt 和 Skill Tools
         const promptParts: string[] = [baseSystemPrompt, decision.systemPromptHint];
         const tools: StandardTool[] = [];
 
