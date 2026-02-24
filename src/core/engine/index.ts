@@ -8,6 +8,8 @@ import { LazyInjector } from '../injector/lazy.js';
 import { ExecutionSandbox, ExecutionMode, AskUserCallback } from '../sandbox/execution.js';
 import { DiagnosticGuard } from '../guard/diagnostic.js';
 import { DaemonServer } from '../daemon/server.js';
+import { MemoryStore } from '../memory/store.js';
+import { ReflectionEngine, FeedbackType } from '../memory/reflection.js';
 import { loadConfig } from '../../config/index.js';
 
 export interface EngineOptions {
@@ -36,6 +38,10 @@ export class TaskEngine {
     private diagnosticGuard: DiagnosticGuard;
     private daemon?: DaemonServer;
 
+    // Phase 4 组件
+    private memoryStore: MemoryStore;
+    private reflectionEngine: ReflectionEngine;
+
     constructor(llm: ILLMProvider, session: Session, options: EngineOptions = {}) {
         this.llm = llm;
         this.session = session;
@@ -58,6 +64,10 @@ export class TaskEngine {
             ?? (this.daemon ? this.daemon.requestApproval.bind(this.daemon) : this.defaultAskUser);
         this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser);
         this.diagnosticGuard = new DiagnosticGuard();
+
+        // Phase 4 init
+        this.memoryStore = new MemoryStore();
+        this.reflectionEngine = new ReflectionEngine(this.llm, this.memoryStore);
     }
 
     private defaultAskUser(question: string): Promise<string> {
@@ -73,14 +83,23 @@ export class TaskEngine {
      * Phase 2 增强：先走 IntentRouter 分类，再通过 LazyInjector 动态组装 Prompt 和 Tools。
      */
     public async runTask(userPrompt: string): Promise<void> {
+        // Phase 4: 初始化记忆库
+        await this.memoryStore.initialize();
+
         this.session.addMessage({ role: 'user', content: userPrompt });
 
         // ── Phase 2: 意图路由 ──
         const decision = await this.router.classify(userPrompt);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
+        // ── Phase 4: 被动召回历史经验 ──
+        const memoryHint = await this.reflectionEngine.recallRelevantCapsules(userPrompt);
+
         // ── Phase 2: 惰性注入 ──
-        const injection = this.injector.resolve(userPrompt, decision, BASE_SYSTEM_PROMPT);
+        const basePrompt = memoryHint
+            ? `${BASE_SYSTEM_PROMPT}\n\n${memoryHint}`
+            : BASE_SYSTEM_PROMPT;
+        const injection = this.injector.resolve(userPrompt, decision, basePrompt);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }
@@ -165,6 +184,16 @@ export class TaskEngine {
         if (retries >= this.maxRetries) {
             console.warn('\n[Engine] Max retries reached. Task suspended.');
         }
+
+        // ── Phase 4: 异步经验萃取（不阻塞主流程） ──
+        this.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
+    }
+
+    /**
+     * Phase 4: 接收用户反馈（点赞/踩），触发经验标记与持久化。
+     */
+    public async submitFeedback(feedback: FeedbackType): Promise<void> {
+        await this.reflectionEngine.onUserFeedback(this.session, feedback);
     }
 
     // ─── ACI 基础工具（常驻上下文） ───
