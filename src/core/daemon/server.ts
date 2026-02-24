@@ -1,0 +1,192 @@
+/**
+ * Daemon Server — 无头守护进程 (Headless Daemon)
+ *
+ * 核心引擎以后台守护进程运行，通过 WebSocket 暴露标准化的 JSON-RPC 事件流。
+ * 任何前端（CLI / TUI / Electron / Web / VSCode Extension）都可以连接并消费事件。
+ *
+ * 支持的 RPC 类型：
+ * - Client → Server: 提交任务、审批操作、发送用户输入
+ * - Server → Client: 流式推理文本、工具调用通知、审批请求
+ */
+
+import { WebSocketServer, WebSocket } from 'ws';
+import { EventEmitter } from 'events';
+
+// ─── RPC 消息协议 ───
+export interface RpcMessage {
+    id?: string;
+    type: 'request' | 'response' | 'event';
+    method: string;
+    params?: Record<string, unknown>;
+    result?: unknown;
+    error?: string;
+}
+
+// ─── 服务端事件类型 ───
+export type DaemonEventType =
+    | 'agent:text'            // Agent 流式文本输出
+    | 'agent:tool_call'       // Agent 发起工具调用
+    | 'agent:tool_result'     // 工具执行结果
+    | 'agent:done'            // 任务完成
+    | 'agent:error'           // 错误
+    | 'sandbox:approval'      // 沙盒审批请求（等待人类确认）
+    | 'session:update'        // Session 状态变更
+    | 'router:decision';      // 路由决策通知
+
+export class DaemonServer extends EventEmitter {
+    private wss: WebSocketServer | null = null;
+    private clients: Set<WebSocket> = new Set();
+    private port: number;
+
+    /** 用于存放等待人类审批的 Promise resolve 回调 */
+    private pendingApprovals: Map<string, (answer: string) => void> = new Map();
+
+    constructor(port: number = 9120) {
+        super();
+        this.port = port;
+    }
+
+    /**
+     * 启动 WebSocket 守护进程。
+     */
+    public start(): void {
+        this.wss = new WebSocketServer({ port: this.port });
+
+        this.wss.on('connection', (ws) => {
+            this.clients.add(ws);
+            console.log(`[Daemon] Client connected. Total: ${this.clients.size}`);
+
+            ws.on('message', (raw) => {
+                try {
+                    const msg: RpcMessage = JSON.parse(raw.toString());
+                    this.handleClientMessage(ws, msg);
+                } catch (err) {
+                    console.error('[Daemon] Invalid message:', err);
+                }
+            });
+
+            ws.on('close', () => {
+                this.clients.delete(ws);
+                console.log(`[Daemon] Client disconnected. Total: ${this.clients.size}`);
+            });
+        });
+
+        console.log(`[Daemon] WebSocket server listening on ws://localhost:${this.port}`);
+    }
+
+    public stop(): void {
+        if (this.wss) {
+            this.wss.close();
+            this.wss = null;
+            console.log('[Daemon] Server stopped.');
+        }
+    }
+
+    /**
+     * 向所有已连接的客户端广播事件。
+     */
+    public broadcast(eventType: DaemonEventType, data?: unknown): void {
+        const msg: RpcMessage = {
+            type: 'event',
+            method: eventType,
+            params: { data },
+        };
+
+        const payload = JSON.stringify(msg);
+        for (const client of this.clients) {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(payload);
+            }
+        }
+    }
+
+    /**
+     * 发送审批请求到前端，阻塞等待人类回复。
+     * 这是 AskUser 的 Daemon 实现版本。
+     */
+    public async requestApproval(question: string, context?: string): Promise<string> {
+        const approvalId = `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // 广播审批请求
+        this.broadcast('sandbox:approval', { approvalId, question, context });
+
+        // 如果没有客户端连接，fallback 到 CLI stdin
+        if (this.clients.size === 0) {
+            return this.fallbackStdinPrompt(question);
+        }
+
+        // 等待客户端回复
+        return new Promise<string>((resolve) => {
+            this.pendingApprovals.set(approvalId, resolve);
+
+            // 超时兜底：60 秒无回复自动拒绝
+            setTimeout(() => {
+                if (this.pendingApprovals.has(approvalId)) {
+                    this.pendingApprovals.delete(approvalId);
+                    resolve('no');
+                }
+            }, 60000);
+        });
+    }
+
+    // ─── 处理客户端发来的消息 ───
+    private handleClientMessage(ws: WebSocket, msg: RpcMessage): void {
+        switch (msg.method) {
+            case 'task:submit': {
+                const prompt = (msg.params?.prompt as string) || '';
+                this.emit('task:submit', prompt, msg.id);
+                break;
+            }
+
+            case 'approval:respond': {
+                const approvalId = msg.params?.approvalId as string;
+                const answer = msg.params?.answer as string;
+                const resolve = this.pendingApprovals.get(approvalId);
+                if (resolve) {
+                    resolve(answer);
+                    this.pendingApprovals.delete(approvalId);
+                }
+                break;
+            }
+
+            case 'session:get': {
+                this.emit('session:get', ws, msg.id);
+                break;
+            }
+
+            default:
+                this.sendTo(ws, {
+                    id: msg.id,
+                    type: 'response',
+                    method: msg.method,
+                    error: `Unknown method: ${msg.method}`,
+                });
+        }
+    }
+
+    /**
+     * 向单个客户端发送消息。
+     */
+    private sendTo(ws: WebSocket, msg: RpcMessage): void {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(msg));
+        }
+    }
+
+    /**
+     * Fallback：无客户端连接时使用 stdin 进行审批。
+     */
+    private fallbackStdinPrompt(question: string): Promise<string> {
+        return new Promise((resolve) => {
+            process.stdout.write(`\n${question}\n> `);
+
+            const onData = (data: Buffer) => {
+                process.stdin.removeListener('data', onData);
+                resolve(data.toString().trim());
+            };
+
+            process.stdin.resume();
+            process.stdin.once('data', onData);
+        });
+    }
+}

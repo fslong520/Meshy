@@ -5,10 +5,16 @@ import { IntentRouter } from '../router/intent.js';
 import { SkillRegistry } from '../skills/registry.js';
 import { SubagentRegistry } from '../subagents/loader.js';
 import { LazyInjector } from '../injector/lazy.js';
+import { ExecutionSandbox, ExecutionMode, AskUserCallback } from '../sandbox/execution.js';
+import { DiagnosticGuard } from '../guard/diagnostic.js';
+import { DaemonServer } from '../daemon/server.js';
 import { loadConfig } from '../../config/index.js';
 
 export interface EngineOptions {
     maxRetries?: number;
+    executionMode?: ExecutionMode;
+    askUser?: AskUserCallback;
+    daemon?: DaemonServer;
 }
 
 const BASE_SYSTEM_PROMPT = 'You are Meshy, an advanced multi-agent AI assistant. Utilize tools carefully to assist the user.';
@@ -25,6 +31,11 @@ export class TaskEngine {
     private subagentRegistry: SubagentRegistry;
     private injector: LazyInjector;
 
+    // Phase 3 组件
+    private sandbox: ExecutionSandbox;
+    private diagnosticGuard: DiagnosticGuard;
+    private daemon?: DaemonServer;
+
     constructor(llm: ILLMProvider, session: Session, options: EngineOptions = {}) {
         this.llm = llm;
         this.session = session;
@@ -33,15 +44,28 @@ export class TaskEngine {
         const config = loadConfig();
         this.maxRetries = options.maxRetries || config.system.maxRetries || 3;
 
-        // 初始化 Phase 2 组件
+        // Phase 2 init
         this.router = new IntentRouter();
         this.skillRegistry = new SkillRegistry();
         this.subagentRegistry = new SubagentRegistry();
         this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry);
-
-        // 启动时扫描技能与子智能体目录
         this.skillRegistry.scan();
         this.subagentRegistry.scan();
+
+        // Phase 3 init
+        this.daemon = options.daemon;
+        const askUser: AskUserCallback = options.askUser
+            ?? (this.daemon ? this.daemon.requestApproval.bind(this.daemon) : this.defaultAskUser);
+        this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser);
+        this.diagnosticGuard = new DiagnosticGuard();
+    }
+
+    private defaultAskUser(question: string): Promise<string> {
+        return new Promise((resolve) => {
+            process.stdout.write(`\n${question}\n> `);
+            process.stdin.resume();
+            process.stdin.once('data', (data) => resolve(data.toString().trim()));
+        });
     }
 
     /**
@@ -177,6 +201,17 @@ export class TaskEngine {
     }
 
     private async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+        // ── Phase 3: 沙盒审批网关 ──
+        const actionType = name === 'readFile' ? 'read_file' : name === 'editFile' ? 'edit_file' : 'run_command';
+        const detail = `${name}(${JSON.stringify(args).slice(0, 120)})`;
+        const approval = await this.sandbox.requestApproval(actionType as any, detail);
+
+        if (!approval.approved) {
+            const reason = approval.reason || 'User denied the action.';
+            this.daemon?.broadcast('agent:error', { tool: name, reason });
+            return `Action denied by sandbox: ${reason}`;
+        }
+
         try {
             if (name === 'readFile') {
                 const res = this.aci.readFile(
@@ -184,22 +219,40 @@ export class TaskEngine {
                     (args.startLine as number) || undefined,
                     (args.maxLines as number) || undefined
                 );
+                this.daemon?.broadcast('agent:tool_result', { tool: name, result: res });
                 return JSON.stringify(res);
             }
 
             if (name === 'editFile') {
-                this.aci.editFile(
-                    args.filePath as string,
-                    args.expectedHash as string,
-                    args.searchBlock as string,
-                    args.replaceBlock as string
-                );
-                return `Successfully edited ${args.filePath}`;
+                // ── Phase 3: LSP 诊断拦截 ──
+                const filePath = args.filePath as string;
+                const searchBlock = args.searchBlock as string;
+                const replaceBlock = args.replaceBlock as string;
+
+                // 模拟应用修改后的内容，先做诊断
+                const currentContent = this.aci.readFile(filePath);
+                const simulatedContent = currentContent.content.replace(searchBlock, replaceBlock);
+                const diagnosticResult = this.diagnosticGuard.checkContent(filePath, simulatedContent);
+
+                if (!diagnosticResult.passed) {
+                    const errorMessages = diagnosticResult.diagnostics
+                        .filter(d => d.severity === 'error')
+                        .map(d => `  Line ${d.line}: ${d.message} (${d.code})`)
+                        .join('\n');
+
+                    this.daemon?.broadcast('agent:error', { tool: name, diagnostics: diagnosticResult.diagnostics });
+                    return `Edit REJECTED by diagnostic guard. ${diagnosticResult.errorCount} error(s) found:\n${errorMessages}\nPlease fix the issues and try again.`;
+                }
+
+                this.aci.editFile(filePath, args.expectedHash as string, searchBlock, replaceBlock);
+                this.daemon?.broadcast('agent:tool_result', { tool: name, success: true });
+                return `Successfully edited ${filePath}`;
             }
 
             return `Error: Unknown tool "${name}".`;
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
+            this.daemon?.broadcast('agent:error', { tool: name, error: message });
             return `Error executing "${name}": ${message}`;
         }
     }
