@@ -105,9 +105,13 @@ export class TaskEngine {
         const memoryHint = await this.reflectionEngine.recallRelevantCapsules(userPrompt);
 
         // ── Phase 2: 惰性注入 ──
-        const basePrompt = memoryHint
-            ? `${BASE_SYSTEM_PROMPT}\n\n${memoryHint}`
-            : BASE_SYSTEM_PROMPT;
+        // 将 ToolCatalog 广告文本附加到 System Prompt，告知 LLM 有哪些按需工具可用
+        const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
+        const promptParts = [BASE_SYSTEM_PROMPT];
+        if (memoryHint) promptParts.push(memoryHint);
+        if (catalogAdvert) promptParts.push(catalogAdvert);
+        const basePrompt = promptParts.join('\n\n');
+
         const injection = this.injector.resolve(userPrompt, decision, basePrompt);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);

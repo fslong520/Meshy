@@ -1,71 +1,105 @@
 /**
  * ToolRegistry — 工具注册表与统一调度器
  *
- * 聚合所有内置工具 + 技能工具 + MCP 工具，
- * 输出标准化的 StandardTool[] 给 LLM，并提供 execute() 统一调度。
+ * 双层架构：
+ * - Built-in 工具（常驻）：每次都注入 LLM context
+ * - Lazy 工具（按需）：通过 ToolCatalog 索引，useTool 激活后才注入
  */
 
 import { ToolDefinition, ToolContext, ToolResult } from './define.js';
 import { StandardTool } from '../llm/provider.js';
+import { ToolCatalog } from './catalog.js';
 import { zodToJsonSchema } from './schema-util.js';
 
 export class ToolRegistry {
-    private tools: Map<string, ToolDefinition> = new Map();
+    private builtinTools: Map<string, ToolDefinition> = new Map();
+    private catalog: ToolCatalog;
 
-    /**
-     * 注册一个工具。同名会覆盖。
-     */
-    public register(tool: ToolDefinition): void {
-        this.tools.set(tool.id, tool);
+    constructor(catalog?: ToolCatalog) {
+        this.catalog = catalog ?? new ToolCatalog();
     }
 
-    /**
-     * 批量注册工具。
-     */
+    // ═══════════════════════════════════════════
+    // Built-in 工具（常驻）
+    // ═══════════════════════════════════════════
+
+    public register(tool: ToolDefinition): void {
+        this.builtinTools.set(tool.id, tool);
+    }
+
     public registerAll(tools: ToolDefinition[]): void {
         for (const tool of tools) {
             this.register(tool);
         }
     }
 
+    // ═══════════════════════════════════════════
+    // Lazy 工具（按需加载，通过 Catalog 管理）
+    // ═══════════════════════════════════════════
+
+    public getCatalog(): ToolCatalog {
+        return this.catalog;
+    }
+
+    // ═══════════════════════════════════════════
+    // 输出 & 调度
+    // ═══════════════════════════════════════════
+
     /**
-     * 将所有注册工具转换为 StandardTool[] 格式（给 LLM payload 用）。
+     * 输出当前应注入 LLM context 的工具列表：
+     * builtin 常驻 + catalog 中已激活的 lazy 工具。
      */
     public toStandardTools(): StandardTool[] {
-        return Array.from(this.tools.values()).map(tool => ({
+        const builtin = Array.from(this.builtinTools.values()).map(tool => ({
             name: tool.id,
             description: tool.description,
             inputSchema: zodToJsonSchema(tool.parameters),
         }));
+
+        const activated = this.catalog.getActivatedTools().map(tool => ({
+            name: tool.id,
+            description: tool.description,
+            inputSchema: zodToJsonSchema(tool.parameters),
+        }));
+
+        return [...builtin, ...activated];
     }
 
     /**
-     * 统一调度入口：根据工具名执行。
+     * 统一调度：先查 builtin，再查 catalog 已激活工具。
      */
     public async execute(
         name: string,
         args: Record<string, unknown>,
         ctx: ToolContext,
     ): Promise<ToolResult> {
-        const tool = this.tools.get(name);
-        if (!tool) {
-            return { output: `Error: Unknown tool "${name}".` };
+        // 优先查找 builtin
+        const builtin = this.builtinTools.get(name);
+        if (builtin) return builtin.execute(args, ctx);
+
+        // 再查找 catalog 中已激活的工具
+        const catalogTool = this.catalog.lookupDefinition(name);
+        if (catalogTool && this.catalog.isActivated(name)) {
+            return catalogTool.execute(args, ctx);
         }
 
-        return tool.execute(args, ctx);
+        // 如果在 catalog 中但未激活，提示用户先 useTool
+        if (catalogTool) {
+            return {
+                output: `Tool "${name}" exists but is not activated. Call useTool("${name}") first to activate it.`,
+            };
+        }
+
+        return { output: `Error: Unknown tool "${name}".` };
     }
 
-    /**
-     * 检查某个工具是否已注册。
-     */
     public has(name: string): boolean {
-        return this.tools.has(name);
+        return this.builtinTools.has(name) || this.catalog.lookupDefinition(name) !== undefined;
     }
 
-    /**
-     * 获取所有已注册工具的 ID 列表。
-     */
     public ids(): string[] {
-        return Array.from(this.tools.keys());
+        const builtinIds = Array.from(this.builtinTools.keys());
+        const catalogIds = this.catalog.getAllEntries().map(e => e.id);
+        return [...builtinIds, ...catalogIds];
     }
 }
