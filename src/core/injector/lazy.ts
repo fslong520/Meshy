@@ -53,8 +53,9 @@ export class LazyInjector {
         const skillNames = new Set<string>(decision.suggestedSkills);
 
         // 同时用用户输入做启发式关键词搜索
+        // 修改：移除硬编码限制 slice(0, 3)，将所有命中结果全部抛出
         const searchHits = this.skillRegistry.searchByKeywords(userInput);
-        for (const hit of searchHits.slice(0, 3)) { // 最多取前 3 个
+        for (const hit of searchHits) {
             skillNames.add(hit.name);
         }
 

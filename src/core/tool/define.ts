@@ -9,10 +9,13 @@
 
 import { z } from 'zod';
 
+import { Session } from '../session/state.js';
+
 // ─── 工具执行上下文 ───
 export interface ToolContext {
     sessionId: string;
     workspaceRoot: string;
+    session?: Session; // 注入 Session 实例，供 useTool 写入状态
     abort?: AbortSignal;
 }
 

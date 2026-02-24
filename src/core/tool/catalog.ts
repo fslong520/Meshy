@@ -24,8 +24,6 @@ export class ToolCatalog {
     private definitions: Map<string, ToolDefinition> = new Map();
     /** 轻量索引 */
     private entries: CatalogEntry[] = [];
-    /** 当前激活的工具 ID */
-    private activated: Set<string> = new Set();
 
     /**
      * 注册一个按需加载工具到目录。
@@ -49,15 +47,6 @@ export class ToolCatalog {
 
     /**
      * 生成工具目录广告文本，注入 System Prompt。
-     *
-     * 输出格式（每行仅约 50 chars，总计几十个 token）：
-     * ```
-     * --- Available Tools (use `useTool` to activate) ---
-     * [lsp] lsp_goto_definition — Jump to symbol definition
-     * [lsp] lsp_find_references — Find all references
-     * [mcp:chrome] chrome_screenshot — Take page screenshot
-     * ---
-     * ```
      */
     public getAdvertText(): string {
         if (this.entries.length === 0) return '';
@@ -81,37 +70,10 @@ export class ToolCatalog {
     }
 
     /**
-     * 查找工具定义（用于激活）。
+     * 查找工具定义（用于获取完整 Schema 或执行）。
      */
     public lookupDefinition(toolId: string): ToolDefinition | undefined {
         return this.definitions.get(toolId);
-    }
-
-    /**
-     * 激活一个工具（标记为已加载）。
-     */
-    public activate(toolId: string): ToolDefinition | undefined {
-        const tool = this.definitions.get(toolId);
-        if (tool) {
-            this.activated.add(toolId);
-        }
-        return tool;
-    }
-
-    /**
-     * 检查工具是否已激活。
-     */
-    public isActivated(toolId: string): boolean {
-        return this.activated.has(toolId);
-    }
-
-    /**
-     * 获取所有已激活的工具定义列表。
-     */
-    public getActivatedTools(): ToolDefinition[] {
-        return Array.from(this.activated)
-            .map(id => this.definitions.get(id))
-            .filter((t): t is ToolDefinition => t !== undefined);
     }
 
     /**
@@ -119,12 +81,5 @@ export class ToolCatalog {
      */
     public getAllEntries(): CatalogEntry[] {
         return [...this.entries];
-    }
-
-    /**
-     * 重置会话激活状态（新会话开始时调用）。
-     */
-    public resetActivations(): void {
-        this.activated.clear();
     }
 }

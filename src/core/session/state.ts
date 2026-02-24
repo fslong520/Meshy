@@ -15,6 +15,8 @@ export class Session {
     public id: string;
     public history: StandardMessage[];
     public blackboard: BlockboardState;
+    /** Current active lazy tools bound to this session */
+    public activatedTools: Set<string>;
 
     constructor(id: string) {
         this.id = id;
@@ -25,6 +27,7 @@ export class Session {
             openFiles: [],
             lastError: null,
         };
+        this.activatedTools = new Set();
     }
 
     public addMessage(message: StandardMessage) {
@@ -33,6 +36,14 @@ export class Session {
 
     public updateBlackboard(updates: Partial<BlockboardState>) {
         this.blackboard = { ...this.blackboard, ...updates };
+    }
+
+    public activateTool(toolId: string) {
+        this.activatedTools.add(toolId);
+    }
+
+    public clearActivatedTools() {
+        this.activatedTools.clear();
     }
 
     /**

@@ -122,8 +122,9 @@ export class TaskEngine {
 
         while (!isDone && retries < this.maxRetries) {
             try {
-                // 将 ToolRegistry 工具 + 惰性注入的技能工具合并
-                const allTools = [...this.toolRegistry.toStandardTools(), ...injection.tools];
+                // 将 ToolRegistry 工具 (Builtin + Session 激活的可选工具) + 惰性注入的技能工具合并
+                const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
+                const allTools = [...registryTools, ...injection.tools];
 
                 const prompt: StandardPrompt = {
                     systemPrompt: injection.systemPrompt,
@@ -197,6 +198,9 @@ export class TaskEngine {
         if (retries >= this.maxRetries) {
             console.warn('\n[Engine] Max retries reached. Task suspended.');
         }
+
+        // 任务结束，清空当前 Session 的按需工具挂载状态，避免污染未来的任务
+        this.session.clearActivatedTools();
 
         // ── Phase 4: 异步经验萃取（不阻塞主流程） ──
         this.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
@@ -278,6 +282,7 @@ export class TaskEngine {
             const result = await this.toolRegistry.execute(name, args, {
                 sessionId: this.session.id,
                 workspaceRoot: process.cwd(),
+                session: this.session, // 注入 Session 供按需工具 (useTool) 修改挂载状态
             });
             return result.output;
         } catch (e: unknown) {
