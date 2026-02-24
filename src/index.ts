@@ -38,7 +38,8 @@ export async function runMeshy(prompt: string) {
 }
 
 // CLI entry point stub
-if (import.meta.url.startsWith('file:') && process.argv[1] === new URL(import.meta.url).pathname) {
+const isMainModule = process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWith('index.js');
+if (isMainModule) {
     const userPrompt = process.argv.slice(2).join(' ') || 'Hello, are you ready?';
     runMeshy(userPrompt).catch(console.error);
 }
