@@ -17,6 +17,7 @@ import { ToolRegistry, createDefaultRegistry, defineTool } from '../tool/index.j
 import { createDefaultToolPackRegistry } from '../tool/tool-pack.js';
 import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
+import { executeDelegate } from '../tool/delegate-tool.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -365,6 +366,29 @@ export class TaskEngine {
                 aci.editFile(args.filePath, args.expectedHash, args.searchBlock, args.replaceBlock);
                 daemon?.broadcast('agent:tool_result', { tool: 'editFile', success: true });
                 return { output: `Successfully edited ${args.filePath}` };
+            },
+        }));
+
+        // ── delegateToAgent: Manager → Subagent 委派 ──
+        const subagentRegistry = this.subagentRegistry;
+        const providerResolver = this.providerResolver;
+        const toolRegistryRef = this.toolRegistry;
+        const parentSession = this.session;
+
+        this.toolRegistry.register(defineTool('delegateToAgent', {
+            description: 'Delegate a sub-task to a specialized sub-agent. The sub-agent runs in an isolated context and returns a result.',
+            parameters: z.object({
+                agentName: z.string().describe('Name of the sub-agent to delegate to'),
+                taskDescription: z.string().describe('Detailed description of the task for the sub-agent'),
+            }),
+            async execute(args) {
+                const result = await executeDelegate(args, {
+                    subagentRegistry,
+                    providerResolver,
+                    toolRegistry: toolRegistryRef,
+                    parentSession,
+                });
+                return { output: JSON.stringify(result) };
             },
         }));
     }
