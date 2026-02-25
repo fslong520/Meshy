@@ -9,6 +9,7 @@ import { SkillRegistry } from '../skills/registry.js';
 import { SubagentRegistry } from '../subagents/loader.js';
 import { LazyInjector } from '../injector/lazy.js';
 import { ExecutionSandbox, ExecutionMode, AskUserCallback } from '../sandbox/execution.js';
+import { AISecondaryReviewer } from '../sandbox/reviewer.js';
 import { DiagnosticGuard } from '../guard/diagnostic.js';
 import { DaemonServer } from '../daemon/server.js';
 import { MemoryStore } from '../memory/store.js';
@@ -75,7 +76,8 @@ export class TaskEngine {
         this.daemon = options.daemon;
         const askUser: AskUserCallback = options.askUser
             ?? (this.daemon ? this.daemon.requestApproval.bind(this.daemon) : this.defaultAskUser);
-        this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser);
+        const reviewer = new AISecondaryReviewer(this.providerResolver);
+        this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser, reviewer);
         this.diagnosticGuard = new DiagnosticGuard();
 
         // Phase 4 init
@@ -366,6 +368,18 @@ export class TaskEngine {
                 aci.editFile(args.filePath, args.expectedHash, args.searchBlock, args.replaceBlock);
                 daemon?.broadcast('agent:tool_result', { tool: 'editFile', success: true });
                 return { output: `Successfully edited ${args.filePath}` };
+            },
+        }));
+        this.toolRegistry.register(defineTool('runCommand', {
+            description: 'Run a shell command in an isolated PTY. Use for running tests, build scripts, or fetching information.',
+            parameters: z.object({
+                command: z.string().describe('The shell command to execute'),
+            }),
+            async execute(args) {
+                // Execute command and wait for result (up to 10 seconds for standard commands)
+                const output = await aci.terminalManager.executeCommand(args.command, 10000);
+                daemon?.broadcast('agent:tool_result', { tool: 'runCommand', success: true });
+                return { output };
             },
         }));
 

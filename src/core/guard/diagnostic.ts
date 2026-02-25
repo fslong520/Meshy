@@ -1,21 +1,6 @@
-/**
- * LSP Diagnostic Guard — 代码诊断拦截器
- *
- * 职责：
- * 1. 在 Agent 修改代码写入磁盘前，先写入虚拟草稿层
- * 2. 调用本地 LSP/编译器进行诊断
- * 3. 如果存在致命错误（Error 级别），阻止写入并返回诊断信息让 LLM 自我修正
- * 4. 如果只有 Warning 或无错误，放行写入
- *
- * 当前 MVP 实现：
- * - 使用 `tsc --noEmit` 对 TypeScript 文件进行类型检查
- * - 未来可扩展对接真正的 LSP Server（通过 JSON-RPC）
- */
-
-import { execSync } from 'child_process';
-import fs from 'fs';
+import * as ts from 'typescript';
 import path from 'path';
-import os from 'os';
+import fs from 'fs';
 
 // ─── 诊断严重程度 ───
 export type DiagnosticSeverity = 'error' | 'warning' | 'info';
@@ -38,132 +23,107 @@ export interface DiagnosticResult {
     diagnostics: Diagnostic[];
 }
 
-// ─── 支持诊断的文件扩展名 → 检查器映射 ───
-const SUPPORTED_CHECKERS: Record<string, string> = {
-    '.ts': 'typescript',
-    '.tsx': 'typescript',
-    '.js': 'javascript',
-    '.jsx': 'javascript',
-};
-
 /**
- * 解析 tsc 的标准错误输出为结构化诊断列表。
- * 典型格式: src/foo.ts(10,5): error TS2322: Type 'X' is not assignable to type 'Y'.
+ * LSP Diagnostic Guard — 代码诊断拦截器
+ * 使用 TypeScript Compiler API 在内存中验证修改后的代码，
+ * 避免写入磁盘造成热更新循环或竞争，速度更快且无需独立启动进程。
  */
-function parseTscOutput(output: string): Diagnostic[] {
-    const diagnostics: Diagnostic[] = [];
-    const pattern = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.+)$/gm;
-    let match: RegExpExecArray | null;
-
-    while ((match = pattern.exec(output)) !== null) {
-        diagnostics.push({
-            file: match[1],
-            line: parseInt(match[2], 10),
-            column: parseInt(match[3], 10),
-            severity: match[4] as DiagnosticSeverity,
-            code: match[5],
-            message: match[6],
-        });
-    }
-
-    return diagnostics;
-}
-
 export class DiagnosticGuard {
     private workspaceRoot: string;
+    private parsedCommandLine: ts.ParsedCommandLine | null = null;
+    private tsconfigPath: string | undefined;
 
     constructor(workspaceRoot: string = process.cwd()) {
         this.workspaceRoot = workspaceRoot;
+        this.tsconfigPath = ts.findConfigFile(workspaceRoot, ts.sys.fileExists, 'tsconfig.json');
+
+        if (this.tsconfigPath) {
+            const configFile = ts.readConfigFile(this.tsconfigPath, ts.sys.readFile);
+            this.parsedCommandLine = ts.parseJsonConfigFileContent(
+                configFile.config,
+                ts.sys,
+                path.dirname(this.tsconfigPath)
+            );
+        }
     }
 
     /**
-     * 对指定文件内容进行诊断检查（不写入磁盘）。
-     * 通过创建临时文件 → 运行 tsc → 解析输出 → 清理临时文件。
+     * 在内存中对指定文件的新内容进行语法和语义诊断（模拟 LSP 行为）。
      */
-    public checkContent(filePath: string, content: string): DiagnosticResult {
+    public checkContent(filePath: string, newContent: string): DiagnosticResult {
         const ext = path.extname(filePath);
-        const checker = SUPPORTED_CHECKERS[ext];
-
-        if (!checker) {
-            // 不支持诊断的文件类型，直接放行
+        if (!['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
             return { passed: true, errorCount: 0, warningCount: 0, diagnostics: [] };
         }
 
-        if (checker === 'typescript') {
-            return this.runTypeScriptCheck(filePath, content);
+        const absolutePath = path.resolve(this.workspaceRoot, filePath);
+
+        // 如果找不到 tsconfig，退回到仅做简单语法检查，不报错缺少模块
+        const options = this.parsedCommandLine?.options || { allowJs: true, checkJs: false, noEmit: true };
+
+        // 创建自定义 CompilerHost，拦截目标文件的读取行为，返回在内存中的 newContent
+        const host = ts.createCompilerHost(options);
+        const originalReadFile = host.readFile.bind(host);
+
+        host.readFile = (fileName: string) => {
+            if (path.resolve(fileName) === absolutePath) {
+                return newContent;
+            }
+            return originalReadFile(fileName);
+        };
+
+        // 获取原有的文件列表，如果没有 parsedCommandLine，至少包含当前检查的文件
+        const rootNames = this.parsedCommandLine?.fileNames.includes(absolutePath)
+            ? this.parsedCommandLine.fileNames
+            : [...(this.parsedCommandLine?.fileNames || []), absolutePath];
+
+        const program = ts.createProgram(rootNames, options, host);
+        const sourceFile = program.getSourceFile(absolutePath);
+
+        if (!sourceFile) {
+            return { passed: true, errorCount: 0, warningCount: 0, diagnostics: [] };
         }
 
-        return { passed: true, errorCount: 0, warningCount: 0, diagnostics: [] };
-    }
+        // 收集语法级别和语义级别的诊断
+        const syntacticDiagnostics = program.getSyntacticDiagnostics(sourceFile);
+        const semanticDiagnostics = program.getSemanticDiagnostics(sourceFile);
+        const allDiagnostics = [...syntacticDiagnostics, ...semanticDiagnostics];
 
-    /**
-     * 对当前工作区进行全量 TypeScript 诊断。
-     */
-    public checkWorkspace(): DiagnosticResult {
-        return this.runTsc();
-    }
+        const formattedDiagnostics: Diagnostic[] = [];
+        let errorCount = 0;
+        let warningCount = 0;
 
-    // ─── TypeScript 单文件检查 ───
-    private runTypeScriptCheck(_filePath: string, content: string): DiagnosticResult {
-        // 写入临时文件进行检查
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meshy-lint-'));
-        const tmpFile = path.join(tmpDir, 'check.ts');
+        for (const diag of allDiagnostics) {
+            if (diag.file) {
+                const { line, character } = diag.file.getLineAndCharacterOfPosition(diag.start!);
+                const message = ts.flattenDiagnosticMessageText(diag.messageText, '\n');
 
-        try {
-            fs.writeFileSync(tmpFile, content, 'utf8');
+                let severity: DiagnosticSeverity = 'error';
+                if (diag.category === ts.DiagnosticCategory.Warning) {
+                    severity = 'warning';
+                    warningCount++;
+                } else if (diag.category === ts.DiagnosticCategory.Message || diag.category === ts.DiagnosticCategory.Suggestion) {
+                    severity = 'info';
+                } else {
+                    errorCount++;
+                }
 
-            const output = this.execTsc(`--noEmit --strict --skipLibCheck "${tmpFile}"`);
-            const diagnostics = parseTscOutput(output);
-
-            const errorCount = diagnostics.filter(d => d.severity === 'error').length;
-            const warningCount = diagnostics.filter(d => d.severity === 'warning').length;
-
-            return {
-                passed: errorCount === 0,
-                errorCount,
-                warningCount,
-                diagnostics,
-            };
-        } finally {
-            // 清理临时文件
-            try {
-                fs.unlinkSync(tmpFile);
-                fs.rmdirSync(tmpDir);
-            } catch { /* ignore cleanup errors */ }
+                formattedDiagnostics.push({
+                    file: path.relative(this.workspaceRoot, diag.file.fileName),
+                    line: line + 1,
+                    column: character + 1,
+                    severity,
+                    message,
+                    code: `TS${diag.code}`
+                });
+            }
         }
-    }
-
-    // ─── 整个工作区 tsc 检查 ───
-    private runTsc(extraArgs: string = ''): DiagnosticResult {
-        const output = this.execTsc(`--noEmit ${extraArgs}`);
-        const diagnostics = parseTscOutput(output);
-
-        const errorCount = diagnostics.filter(d => d.severity === 'error').length;
-        const warningCount = diagnostics.filter(d => d.severity === 'warning').length;
 
         return {
             passed: errorCount === 0,
             errorCount,
             warningCount,
-            diagnostics,
+            diagnostics: formattedDiagnostics
         };
-    }
-
-    private execTsc(args: string): string {
-        try {
-            execSync(`npx tsc ${args}`, {
-                cwd: this.workspaceRoot,
-                encoding: 'utf8',
-                stdio: ['pipe', 'pipe', 'pipe'],
-                timeout: 30000,
-            });
-            return ''; // 无错误
-        } catch (err: unknown) {
-            // tsc 在存在错误时会以非 0 退出码退出
-            if (err && typeof err === 'object' && 'stdout' in err) {
-                return (err as { stdout: string }).stdout || '';
-            }
-            return '';
-        }
     }
 }

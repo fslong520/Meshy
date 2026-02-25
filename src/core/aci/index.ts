@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
+import { TerminalManager } from './terminal.js';
+
 export interface ReadFileResult {
     content: string;
     totalLines: number;
@@ -11,9 +13,11 @@ export interface ReadFileResult {
 
 export class AgentComputerInterface {
     private workspaceRoot: string;
+    public terminalManager: TerminalManager;
 
     constructor(workspaceRoot: string = process.cwd()) {
         this.workspaceRoot = workspaceRoot;
+        this.terminalManager = new TerminalManager(this.workspaceRoot);
     }
 
     private resolveSafePath(userPath: string): string {

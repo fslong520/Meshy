@@ -90,6 +90,8 @@ function classifyRisk(actionType: ActionType, detail: string): RiskLevel {
     return 'moderate';
 }
 
+import { AISecondaryReviewer } from './reviewer.js';
+
 /**
  * ExecutionSandbox — 安全沙盒控制器
  *
@@ -98,10 +100,16 @@ function classifyRisk(actionType: ActionType, detail: string): RiskLevel {
 export class ExecutionSandbox {
     private mode: ExecutionMode;
     private askUser: AskUserCallback;
+    private reviewer?: AISecondaryReviewer;
 
-    constructor(mode: ExecutionMode = 'default', askUser: AskUserCallback) {
+    constructor(
+        mode: ExecutionMode = 'default',
+        askUser: AskUserCallback,
+        reviewer?: AISecondaryReviewer
+    ) {
         this.mode = mode;
         this.askUser = askUser;
+        this.reviewer = reviewer;
     }
 
     public getMode(): ExecutionMode {
@@ -151,7 +159,7 @@ export class ExecutionSandbox {
             return { approved: true };
         }
 
-        // 第二级：黑名单阻断
+        // 第二级：黑名单阻断（需人类再确认）
         if (risk === 'dangerous') {
             const answer = await this.askUser(
                 `⚠️ DANGEROUS ACTION BLOCKED\nType: ${actionType}\nDetail: ${detail}\n\nDo you want to allow this? (yes/no)`,
@@ -163,10 +171,28 @@ export class ExecutionSandbox {
             };
         }
 
-        // 第三级：中等风险自动放行但记录日志
-        // 未来可接入 AI 二次审阅模型
-        console.log(`[Sandbox:SMART] Auto-approving moderate risk: ${actionType} — ${detail.slice(0, 80)}`);
-        return { approved: true };
+        // 第三级：中等风险，转交 AI 二次审阅
+        if (this.reviewer) {
+            console.log(`[Sandbox:SMART] Running AI Secondary Review for: ${actionType} — ${detail.slice(0, 80)}`);
+            const review = await this.reviewer.reviewAction(actionType, detail);
+            if (review.approved) {
+                console.log(`[Sandbox:SMART] AI Approved. Reason: ${review.reason}`);
+                return { approved: true };
+            } else {
+                // 如果 AI 拒绝，退回到人类确认
+                console.warn(`[Sandbox:SMART] AI Rejected. Reason: ${review.reason}`);
+                const answer = await this.askUser(
+                    `🤖 AI Review Failed\nReason: ${review.reason}\nAction: ${actionType}\nDetail: ${detail}\n\nApprove manually? (yes/no)`
+                );
+                return { approved: answer.trim().toLowerCase() === 'yes' };
+            }
+        }
+
+        // 兼容降级：如果没有提供 reviewer，直接退回到人类确认
+        const answerFallback = await this.askUser(
+            `🔒 Approval Required (Unknown Risk)\nAction: ${actionType}\nDetail: ${detail}\n\nApprove? (yes/no)`
+        );
+        return { approved: answerFallback.trim().toLowerCase() === 'yes' };
     }
 
     // ─── DEFAULT 模式：所有写操作需确认 ───
