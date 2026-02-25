@@ -96,4 +96,8 @@ export class AnthropicAdapter implements ILLMProvider {
             throw err;
         }
     }
+
+    async generateEmbedding(_text: string): Promise<number[]> {
+        throw new Error('Anthropic API does not provide an endpoint for text embeddings. Please map the embedding request to an OpenAI model provider.');
+    }
 }

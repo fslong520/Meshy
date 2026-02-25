@@ -81,7 +81,8 @@ export class TaskEngine {
         this.diagnosticGuard = new DiagnosticGuard();
 
         // Phase 4 init
-        this.memoryStore = new MemoryStore();
+        const embeddingProvider = this.providerResolver.getEmbeddingProvider();
+        this.memoryStore = new MemoryStore(process.cwd(), embeddingProvider);
         this.reflectionEngine = new ReflectionEngine(this.providerResolver.getProvider(), this.memoryStore);
 
         // Tool System init: 注册内置工具 + ACI 工具

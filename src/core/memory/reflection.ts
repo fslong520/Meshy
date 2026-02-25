@@ -163,6 +163,18 @@ export class ReflectionEngine {
             parts.push(`Last error: ${session.blackboard.lastError}`);
         }
 
+        // 提取当前的轻量级状态变更 (Git Diff snippet)
+        try {
+            const { execSync } = require('child_process');
+            const diff = execSync('git diff HEAD', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+            if (diff && diff.trim().length > 0) {
+                // 取前 2000 个字符防止超长截断上下文
+                parts.push(`Code Changes (Diff):\n${diff.slice(0, 2000)}${diff.length > 2000 ? '\n...(truncated)' : ''}`);
+            }
+        } catch {
+            // Ignore if git is not available or not a repo
+        }
+
         return parts.join('\n');
     }
 

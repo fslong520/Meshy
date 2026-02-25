@@ -42,4 +42,9 @@ export interface ILLMProvider {
         prompt: StandardPrompt,
         onEvent: (event: AgentMessageEvent) => void
     ): Promise<void>;
+
+    /**
+     * Generates a vector embedding for the given text.
+     */
+    generateEmbedding(text: string): Promise<number[]>;
 }

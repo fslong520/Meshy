@@ -112,4 +112,13 @@ export class OpenAIAdapter implements ILLMProvider {
             throw err;
         }
     }
+
+    async generateEmbedding(text: string): Promise<number[]> {
+        const response = await this.client.embeddings.create({
+            model: 'text-embedding-3-small', // Default fallback embedding model
+            input: text,
+            dimensions: 1536
+        });
+        return response.data[0].embedding;
+    }
 }

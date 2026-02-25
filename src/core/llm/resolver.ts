@@ -56,6 +56,20 @@ export class ProviderResolver {
     }
 
     /**
+     * 获取支持 Embeddings 的 Provider（通常回退到 OpenAI，因为部分厂商不支持）
+     */
+    public getEmbeddingProvider(): ILLMProvider {
+        // 如果系统配置了专用的 Embedding 映射，可从 config 读
+        // 当前简单处理：如果默认 Provider 支持 Embedding（假设 OpenAI），就返回默认
+        // 否则硬编码回落到 OpenAI
+        if (this.defaultProvider === 'openai') {
+            return this.getProvider();
+        }
+
+        return this.resolveInstance('openai', 'text-embedding-3-small');
+    }
+
+    /**
      * 单例解析和挂载核心逻辑。缓存 Key 为 "provider:model"
      */
     private resolveInstance(providerName: string, modelName: string): ILLMProvider {
