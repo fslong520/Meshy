@@ -184,6 +184,7 @@ export class LazyInjector {
     /**
      * 构建 Subagent 专属注入结果。
      * Subagent 有自己独立的 System Prompt 和工具白名单。
+     * 当 allowedTools 非空时，仅暴露命中白名单的工具；否则全量暴露。
      */
     private buildSubagentInjection(
         agent: SubagentConfig,
@@ -191,7 +192,7 @@ export class LazyInjector {
     ): InjectionResult {
         const tools: StandardTool[] = [];
 
-        // 从 SkillRegistry 中加载 Subagent 白名单内的工具
+        // 从 SkillRegistry 中加载 Subagent 白名单内的技能工具
         for (const toolName of agent.allowedTools) {
             const skill = this.skillRegistry.getSkill(toolName);
             if (skill?.tools) {
@@ -202,6 +203,18 @@ export class LazyInjector {
                         inputSchema: t.inputSchema,
                     });
                 }
+            }
+        }
+
+        // 从 ToolRegistry 中按白名单筛选内置工具
+        const hasWhitelist = agent.allowedTools.length > 0;
+        const whitelistSet = new Set(agent.allowedTools);
+        const registryTools = this.toolRegistry.toStandardTools();
+
+        for (const rt of registryTools) {
+            // 白名单为空 → 全量暴露；白名单非空 → 仅暴露命中项
+            if (!hasWhitelist || whitelistSet.has(rt.name)) {
+                tools.push(rt);
             }
         }
 
