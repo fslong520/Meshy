@@ -86,6 +86,13 @@ export class Session {
         this.ragSelectedTools.clear();
     }
 
+    /** 清空整个 Session（历史、黑板、工具挂载全部重置） */
+    public clear(): void {
+        this.history = [];
+        this.blackboard = { currentGoal: '', tasks: [], openFiles: [], lastError: null };
+        this.clearActivatedTools();
+    }
+
     /**
      * Compresses or truncates history if it gets too long.
      * A true implementation would summarize older events or use RAG.

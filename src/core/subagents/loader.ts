@@ -3,14 +3,15 @@
  *
  * 职责：
  * 1. 扫描 `.agent/subagents/` 目录下的 Markdown 配置文件
- * 2. 解析 YAML Frontmatter 作为 Subagent 的工程配置（模型、工具白名单等）
+ * 2. 解析 YAML-like Frontmatter（简易 key: value 行解析，不依赖 yaml 库）
  * 3. 解析 Markdown Body 作为 Subagent 的 System Prompt（灵魂/Persona）
  * 4. 提供按名称精确唤醒和按关键词模糊检索能力
+ *
+ * 参考 OpenCode 的 agent 定义方式：Frontmatter 配置 + Body 即 Prompt。
  */
 
 import fs from 'fs';
 import path from 'path';
-import YAML from 'yaml';
 
 // ─── Subagent 配置 ───
 export interface SubagentConfig {
@@ -34,28 +35,26 @@ export interface SubagentConfig {
     reportFormat: 'text' | 'json';
 }
 
-// ─── Frontmatter 解析 ───
+// ─── Frontmatter 解析（简易 key: value，参考 OpenCode 实现） ───
 const YAML_FENCE_REGEX = /^---\s*\n([\s\S]*?)\n---/;
+const JSON_BLOCK_REGEX = /^```json\s*\n([\s\S]*?)\n```/;
 
 /**
- * 从 Markdown 中提取 YAML Frontmatter（使用 `yaml` 库进行可靠解析）。
- * 同时支持 JSON 代码块格式（```json ... ```）作为后备。
+ * 简易 Frontmatter 解析器。
+ * 逐行解析 `key: value` 格式，支持 JSON 内联值（数组/对象）。
+ * 不引入第三方 YAML 库，保持零依赖。
  */
 function parseFrontmatter(content: string): { meta: Record<string, unknown>; body: string } {
-    // 优先尝试标准 YAML Frontmatter (--- ... ---)
+    // 优先匹配 --- 围栏
     const yamlMatch = content.match(YAML_FENCE_REGEX);
     if (yamlMatch) {
-        try {
-            const meta = YAML.parse(yamlMatch[1]) as Record<string, unknown>;
-            const body = content.slice(yamlMatch[0].length).trim();
-            return { meta: meta ?? {}, body };
-        } catch (err) {
-            console.warn(`[SubagentLoader] YAML parse error, falling back to raw body:`, err);
-        }
+        const meta = parseKeyValueBlock(yamlMatch[1]);
+        const body = content.slice(yamlMatch[0].length).trim();
+        return { meta, body };
     }
 
     // 后备：JSON 代码块
-    const jsonMatch = content.match(/^```json\s*\n([\s\S]*?)\n```/);
+    const jsonMatch = content.match(JSON_BLOCK_REGEX);
     if (jsonMatch) {
         try {
             const meta = JSON.parse(jsonMatch[1]);
@@ -65,6 +64,50 @@ function parseFrontmatter(content: string): { meta: Record<string, unknown>; bod
     }
 
     return { meta: {}, body: content };
+}
+
+/**
+ * 逐行解析 key: value 块。
+ * 值支持：字符串、数字、布尔、JSON 数组/对象。
+ */
+function parseKeyValueBlock(block: string): Record<string, unknown> {
+    const meta: Record<string, unknown> = {};
+
+    for (const line of block.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+
+        const colonIdx = trimmed.indexOf(':');
+        if (colonIdx <= 0) continue;
+
+        const key = trimmed.slice(0, colonIdx).trim();
+        const rawVal = trimmed.slice(colonIdx + 1).trim();
+
+        meta[key] = parseSimpleValue(rawVal);
+    }
+
+    return meta;
+}
+
+/** 将原始字符串值转为合适的 JS 类型 */
+function parseSimpleValue(raw: string): unknown {
+    if (raw.length === 0) return '';
+
+    // JSON 内联值（数组或对象）
+    if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+        try { return JSON.parse(raw); } catch { /* fallthrough */ }
+    }
+
+    // 布尔
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+
+    // 数字
+    const asNum = Number(raw);
+    if (!isNaN(asNum) && raw.length > 0) return asNum;
+
+    // 去除可能的引号包裹
+    return raw.replace(/^["']|["']$/g, '');
 }
 
 /** 安全提取字符串数组 */
@@ -139,14 +182,12 @@ export class SubagentRegistry {
      * 解析 `@agent_name` 或 `@agent:agent_name` 前缀。
      */
     public resolveAtMention(input: string): { agent: SubagentConfig | null; cleanInput: string } {
-        // 支持 @agent:name 命名空间格式
         const nsMatch = input.match(/^@agent:(\S+)\s*/);
         if (nsMatch) {
             const agent = this.agents.get(nsMatch[1]) ?? null;
             return { agent, cleanInput: input.slice(nsMatch[0].length).trim() };
         }
 
-        // 兼容旧的 @name 格式
         const atMatch = input.match(/^@(\S+)\s*/);
         if (!atMatch) {
             return { agent: null, cleanInput: input };

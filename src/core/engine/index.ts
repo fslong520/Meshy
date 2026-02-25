@@ -3,6 +3,8 @@ import { ProviderResolver } from '../llm/resolver.js';
 import { AgentComputerInterface } from '../aci/index.js';
 import { Session } from '../session/state.js';
 import { IntentRouter } from '../router/intent.js';
+import { InputParser, ParsedInput } from '../router/input-parser.js';
+import { SystemPromptBuilder } from '../router/prompt-builder.js';
 import { SkillRegistry } from '../skills/registry.js';
 import { SubagentRegistry } from '../subagents/loader.js';
 import { LazyInjector } from '../injector/lazy.js';
@@ -93,41 +95,136 @@ export class TaskEngine {
     }
 
     /**
+     * 处理 slash 命令（/ask, /plan, /undo, /clear 等）。
+     * 这些命令不走 LLM 流程，直接在本地系统层面执行。
+     */
+    private async handleSlashCommand(
+        command: import('../router/input-parser.js').SlashCommand,
+        parsed: ParsedInput,
+    ): Promise<void> {
+        switch (command.type) {
+            case 'clear':
+                this.session.clear();
+                console.log('[Slash] Session cleared.');
+                break;
+
+            case 'undo':
+                console.log('[Slash] Undo requested — rolling back last edit via ACI.');
+                // 未来可对接 git checkout / ACI 层回滚
+                break;
+
+            case 'help':
+                console.log([
+                    'Available commands:',
+                    '  /ask <question>   — Ask without modifying code',
+                    '  /plan <task>      — Plan mode, output structured steps',
+                    '  /clear            — Clear current session',
+                    '  /undo             — Roll back last edit',
+                    '  /test             — Run tests',
+                    '  /compact          — Compress conversation history',
+                    '  /help             — Show this help',
+                ].join('\n'));
+                break;
+
+            case 'ask':
+            case 'plan':
+            case 'test':
+            case 'summarize':
+            case 'compact':
+                // 这些命令带有参数，仍需走 LLM 流程但附带约束
+                // 将约束信息注入后走正常 runTask 路径
+                if (command.args) {
+                    const constraint = command.type === 'ask'
+                        ? 'READ-ONLY mode: Do NOT use EditFile or WriteFile tools.'
+                        : command.type === 'plan'
+                            ? 'PLAN-ONLY mode: Output a structured task breakdown. Do NOT modify any files.'
+                            : `Mode: ${command.type}`;
+                    this.session.addMessage({ role: 'user', content: command.args });
+
+                    const decision = await this.router.classify(command.args);
+                    const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
+                    const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+                        .withRoutingHint(decision.systemPromptHint)
+                        .withConstraint(constraint);
+                    if (catalogAdvert) builder.withCatalogAdvert(catalogAdvert);
+
+                    const basePrompt = builder.build();
+                    const injection = await this.injector.resolve(
+                        command.args, decision, basePrompt, this.session, this.providerResolver,
+                    );
+
+                    // 进入正常的 LLM 推理循环
+                    await this.runLLMLoop(injection);
+                }
+                break;
+        }
+    }
+
+    /**
      * Main execution loop.
-     * Phase 2 增强：先走 IntentRouter 分类，再通过 LazyInjector 动态组装 Prompt 和 Tools。
+     * Phase 2 增强：先走 InputParser 控制语法 → IntentRouter 分类 → LazyInjector 动态组装。
      */
     public async runTask(userPrompt: string): Promise<void> {
         // Phase 4: 初始化记忆库
         await this.memoryStore.initialize();
 
+        // ── Phase 2: 输入语法解析 ──
+        const parsed = InputParser.parse(userPrompt);
+
+        // 处理 slash 命令（拦截并提前返回）
+        if (parsed.slashCommand) {
+            await this.handleSlashCommand(parsed.slashCommand, parsed);
+            return;
+        }
+
         this.session.addMessage({ role: 'user', content: userPrompt });
 
-        // ── Phase 2: 意图路由 ──
-        const decision = await this.router.classify(userPrompt);
+        // ── Phase 2: 意图路由（使用清洗后的文本） ──
+        const decision = await this.router.classify(parsed.cleanText);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
         // ── Phase 4: 被动召回历史经验 ──
-        const memoryHint = await this.reflectionEngine.recallRelevantCapsules(userPrompt);
+        const memoryHint = await this.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
 
-        // ── Phase 2: 惰性注入 ──
-        // 将 ToolCatalog 广告文本附加到 System Prompt，告知 LLM 有哪些按需工具可用
+        // ── Phase 2: 使用 SystemPromptBuilder 组装 Prompt ──
         const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
-        const promptParts = [BASE_SYSTEM_PROMPT];
-        if (memoryHint) promptParts.push(memoryHint);
-        if (catalogAdvert) promptParts.push(catalogAdvert);
-        const basePrompt = promptParts.join('\n\n');
+        const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+            .withRoutingHint(decision.systemPromptHint);
+
+        if (memoryHint) builder.withMemoryHint(memoryHint);
+        if (catalogAdvert) builder.withCatalogAdvert(catalogAdvert);
+
+        // 注入 @file: 引用的文件内容到上下文
+        for (const mention of parsed.mentions) {
+            if (mention.namespace === 'file') {
+                try {
+                    const fileContent = this.aci.readFile(mention.value);
+                    builder.withContextBlock(`file:${mention.value}`, fileContent.content);
+                } catch {
+                    console.warn(`[InputParser] Could not read file: ${mention.value}`);
+                }
+            }
+        }
+
+        const basePrompt = builder.build();
 
         const injection = await this.injector.resolve(userPrompt, decision, basePrompt, this.session, this.providerResolver);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }
 
+        await this.runLLMLoop(injection);
+    }
+
+    /**
+     * 核心 LLM 推理循环。接收注入结果，执行多轮工具调用直至完成或重试上限。
+     */
+    private async runLLMLoop(injection: import('../injector/lazy.js').InjectionResult): Promise<void> {
         let isDone = false;
         let retries = 0;
 
         while (!isDone && retries < this.maxRetries) {
             try {
-                // 将 ToolRegistry 工具 (Builtin + Session 激活的可选工具) + 惰性注入的技能工具合并
                 const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
                 const allTools = [...registryTools, ...injection.tools];
 
@@ -165,14 +262,12 @@ export class TaskEngine {
                     }
                 });
 
-                // 如果模型只给了纯文本回复（无 Tool Call），结束循环
                 if (!currentToolCall.id) {
                     this.session.addMessage({ role: 'assistant', content: fullResponseText });
                     isDone = true;
                     break;
                 }
 
-                // 记录 Tool Call 到 Session
                 isDone = false;
                 const parsedArgs = currentToolCall.rawArgs ? JSON.parse(currentToolCall.rawArgs) : {};
                 this.session.addMessage({
@@ -185,7 +280,6 @@ export class TaskEngine {
                     },
                 });
 
-                // 执行工具
                 const result = await this.executeTool(currentToolCall.name, parsedArgs);
                 this.session.addMessage({
                     role: 'user',
@@ -211,10 +305,7 @@ export class TaskEngine {
             console.warn('\n[Engine] Max retries reached. Task suspended.');
         }
 
-        // 任务结束，清空当前 Session 的按需工具挂载状态，避免污染未来的任务
         this.session.clearActivatedTools();
-
-        // ── Phase 4: 异步经验萃取（不阻塞主流程） ──
         this.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
     }
 
