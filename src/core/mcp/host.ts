@@ -99,6 +99,32 @@ export class McpHostRuntime {
     }
 
     /**
+     * 获取当前加载的所有 MCP Server 提供的工具总数
+     */
+    public getToolCount(): number {
+        let count = 0;
+        for (const instance of this.servers.values()) {
+            count += instance.tools.length;
+        }
+        return count;
+    }
+
+    /**
+     * 自动拉起所有配置了 autoStart: true 的 Server
+     */
+    public async ensureAutoStartServers(): Promise<void> {
+        const promises: Promise<void>[] = [];
+        for (const [name, instance] of this.servers) {
+            if (instance.config.autoStart && instance.status !== 'running') {
+                promises.push(this.startServer(name).catch(err => {
+                    console.error(`[MCP] Failed to auto-start server ${name}:`, err);
+                }));
+            }
+        }
+        await Promise.all(promises);
+    }
+
+    /**
      * 启动指定的 MCP Server 子进程，通过 stdio 通信。
      */
     public async startServer(name: string): Promise<void> {

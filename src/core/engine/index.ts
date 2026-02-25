@@ -19,6 +19,7 @@ import { createDefaultToolPackRegistry } from '../tool/tool-pack.js';
 import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 import { executeDelegate } from '../tool/delegate-tool.js';
+import { McpHostRuntime } from '../mcp/host.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -53,6 +54,9 @@ export class TaskEngine {
     // Tool System
     private toolRegistry: ToolRegistry;
 
+    // MCP Host
+    private mcpHost: McpHostRuntime;
+
     constructor(providerResolver: ProviderResolver, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
         this.session = session;
@@ -84,6 +88,10 @@ export class TaskEngine {
         const embeddingProvider = this.providerResolver.getEmbeddingProvider();
         this.memoryStore = new MemoryStore(process.cwd(), embeddingProvider);
         this.reflectionEngine = new ReflectionEngine(this.providerResolver.getProvider(), this.memoryStore);
+
+        // Phase 5 init (MCP)
+        this.mcpHost = new McpHostRuntime(process.cwd());
+        this.mcpHost.loadConfig();
 
         // Tool System init: 注册内置工具 + ACI 工具
         this.toolRegistry = createDefaultRegistry();
@@ -147,10 +155,20 @@ export class TaskEngine {
 
                     const decision = await this.router.classify(command.args);
                     const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
+
+                    // 补充 MCP 广告
+                    const mcpSummaries = this.mcpHost.getServerSummaries();
+                    const mcpAdvert = mcpSummaries.length > 0
+                        ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+                        : '';
+
                     const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
                         .withRoutingHint(decision.systemPromptHint)
                         .withConstraint(constraint);
-                    if (catalogAdvert) builder.withCatalogAdvert(catalogAdvert);
+
+                    if (catalogAdvert || mcpAdvert) {
+                        builder.withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+                    }
 
                     const basePrompt = builder.build();
                     const injection = await this.injector.resolve(
@@ -172,6 +190,9 @@ export class TaskEngine {
         // Phase 4: 初始化记忆库
         await this.memoryStore.initialize();
 
+        // Phase 5: 启动开机自启的 MCP Servers
+        await this.mcpHost.ensureAutoStartServers();
+
         // ── Phase 2: 输入语法解析 ──
         const parsed = InputParser.parse(userPrompt);
 
@@ -192,11 +213,20 @@ export class TaskEngine {
 
         // ── Phase 2: 使用 SystemPromptBuilder 组装 Prompt ──
         const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
+
+        // 补充 MCP 广告
+        const mcpSummaries = this.mcpHost.getServerSummaries();
+        const mcpAdvert = mcpSummaries.length > 0
+            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+            : '';
+
         const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
             .withRoutingHint(decision.systemPromptHint);
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
-        if (catalogAdvert) builder.withCatalogAdvert(catalogAdvert);
+        if (catalogAdvert || mcpAdvert) {
+            builder.withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+        }
 
         // 注入 @file: 引用的文件内容到上下文
         for (const mention of parsed.mentions) {
@@ -230,7 +260,8 @@ export class TaskEngine {
         while (!isDone && retries < this.maxRetries) {
             try {
                 const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
-                const allTools = [...registryTools, ...injection.tools];
+                const mcpTools = this.mcpHost.getAllTools();
+                const allTools = [...registryTools, ...mcpTools, ...injection.tools];
 
                 const prompt: StandardPrompt = {
                     systemPrompt: injection.systemPrompt,
@@ -252,11 +283,13 @@ export class TaskEngine {
                     if (event.type === 'text') {
                         fullResponseText += event.data;
                         process.stdout.write(event.data);
+                        this.daemon?.broadcast('agent:text', event.data);
                     } else if (event.type === 'tool_call_start') {
                         currentToolCall.id = event.data.id;
                         currentToolCall.name = event.data.name;
                         currentToolCall.rawArgs = '';
                         process.stdout.write(`\n[Agent]: Calling tool "${currentToolCall.name}"...\n`);
+                        this.daemon?.broadcast('agent:tool_call', { id: currentToolCall.id, name: currentToolCall.name });
                     } else if (event.type === 'tool_call_chunk') {
                         currentToolCall.rawArgs += event.data;
                     } else if (event.type === 'done') {
@@ -285,6 +318,7 @@ export class TaskEngine {
                 });
 
                 const result = await this.executeTool(currentToolCall.name, parsedArgs);
+                this.daemon?.broadcast('agent:tool_result', { tool: currentToolCall.name, success: true });
                 this.session.addMessage({
                     role: 'user',
                     content: {
@@ -310,6 +344,7 @@ export class TaskEngine {
         }
 
         this.session.clearActivatedTools();
+        this.daemon?.broadcast('agent:done', {});
         this.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
     }
 
@@ -421,6 +456,10 @@ export class TaskEngine {
         }
 
         try {
+            if (name.startsWith('mcp:')) {
+                return await this.mcpHost.callTool(name, args);
+            }
+
             const result = await this.toolRegistry.execute(name, args, {
                 sessionId: this.session.id,
                 workspaceRoot: process.cwd(),

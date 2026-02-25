@@ -4,6 +4,7 @@ import { AnthropicAdapter } from './core/llm/anthropic.js';
 import { Session } from './core/session/state.js';
 import { TaskEngine } from './core/engine/index.js';
 import { ILLMProvider } from './core/llm/provider.js';
+import { DaemonServer } from './core/daemon/server.js';
 
 export async function runMeshy(prompt: string) {
     // 1. Load configuration
@@ -17,14 +18,33 @@ export async function runMeshy(prompt: string) {
     // 3. Initialize Session & Blackboard
     const session = new Session('session-' + Date.now());
 
-    // 4. Start Task Engine
+    // 4. Start Daemon Server (Phase 5)
+    const daemon = new DaemonServer(9120);
+    daemon.start();
+
+    // 5. Start Task Engine
     const engine = new TaskEngine(providerResolver, session, {
-        maxRetries: config.system.maxRetries
+        maxRetries: config.system.maxRetries,
+        daemon: daemon,
+    });
+
+    // 监听 Web UI 发来的独立任务（如果在守护进程模式下使用）
+    daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
+        console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
+        try {
+            await engine.runTask(submittedPrompt);
+            daemon.broadcast('agent:done', { id });
+        } catch (err) {
+            console.error('[Meshy] Task from Web UI failed:', err);
+        }
     });
 
     console.log(`[Meshy] Starting task...`);
     await engine.runTask(prompt);
-    console.log(`\n[Meshy] Task completed or suspended.`);
+
+    // 如果没有通过 CLI 传入任何任务，或者任务结束，可以考虑保持进程不退出，以服务 Web UI。
+    // 为了防止 CLI 立即退出，我们这里不需要手动 stop daemon。
+    console.log(`\n[Meshy] CLI Task completed or suspended. Daemon is still running for Web UI.`);
 }
 
 // CLI entry point stub

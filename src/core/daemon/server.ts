@@ -11,6 +11,9 @@
 
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventEmitter } from 'events';
+import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // ─── RPC 消息协议 ───
 export interface RpcMessage {
@@ -35,6 +38,7 @@ export type DaemonEventType =
 
 export class DaemonServer extends EventEmitter {
     private wss: WebSocketServer | null = null;
+    private httpServer: http.Server | null = null;
     private clients: Set<WebSocket> = new Set();
     private port: number;
 
@@ -47,10 +51,40 @@ export class DaemonServer extends EventEmitter {
     }
 
     /**
-     * 启动 WebSocket 守护进程。
+     * 启动 HTTP 静态服务 + WebSocket 守护进程。
      */
     public start(): void {
-        this.wss = new WebSocketServer({ port: this.port });
+        const publicDir = path.join(process.cwd(), 'public');
+
+        this.httpServer = http.createServer((req, res) => {
+            // 简单静态文件服务
+            let filePath = path.join(publicDir, req.url === '/' ? 'index.html' : req.url || '');
+            const extname = path.extname(filePath);
+            const contentType = {
+                '.html': 'text/html',
+                '.js': 'text/javascript',
+                '.css': 'text/css',
+                '.json': 'application/json',
+                '.png': 'image/png',
+            }[extname] || 'text/plain';
+
+            fs.readFile(filePath, (err, content) => {
+                if (err) {
+                    if (err.code === 'ENOENT') {
+                        res.writeHead(404);
+                        res.end('File not found', 'utf-8');
+                    } else {
+                        res.writeHead(500);
+                        res.end(`Server Error: ${err.code}`, 'utf-8');
+                    }
+                } else {
+                    res.writeHead(200, { 'Content-Type': contentType });
+                    res.end(content, 'utf-8');
+                }
+            });
+        });
+
+        this.wss = new WebSocketServer({ server: this.httpServer });
 
         this.wss.on('connection', (ws) => {
             this.clients.add(ws);
@@ -71,15 +105,22 @@ export class DaemonServer extends EventEmitter {
             });
         });
 
-        console.log(`[Daemon] WebSocket server listening on ws://localhost:${this.port}`);
+        this.httpServer.listen(this.port, () => {
+            console.log(`[Daemon] Web Dashboard & WebSocket listening on port ${this.port}`);
+            console.log(`[Daemon] Open http://localhost:${this.port} in your browser`);
+        });
     }
 
     public stop(): void {
         if (this.wss) {
             this.wss.close();
             this.wss = null;
-            console.log('[Daemon] Server stopped.');
         }
+        if (this.httpServer) {
+            this.httpServer.close();
+            this.httpServer = null;
+        }
+        console.log('[Daemon] Server stopped.');
     }
 
     /**
