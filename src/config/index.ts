@@ -15,6 +15,13 @@ export const configSchema = z.object({
         fallback: z.string().default('claude-3-5-sonnet-20240620'),
         small: z.string().default('gpt-4o-mini'),
     }).default({ default: 'gpt-4o', fallback: 'claude-3-5-sonnet-20240620', small: 'gpt-4o-mini' }),
+    tasks: z.record(
+        z.string(),
+        z.object({
+            provider: z.string(),
+            model: z.string(),
+        })
+    ).default({}),
     system: z.object({
         maxRetries: z.number().default(3),
         logLevel: z.string().default('info'),

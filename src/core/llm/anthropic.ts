@@ -10,9 +10,11 @@ import {
 
 export class AnthropicAdapter implements ILLMProvider {
     private client: Anthropic;
+    private model: string;
 
-    constructor(apiKey: string) {
+    constructor(apiKey: string, model: string = 'claude-3-5-sonnet-20240620') {
         this.client = new Anthropic({ apiKey });
+        this.model = model;
     }
 
     async generateResponseStream(
@@ -67,7 +69,7 @@ export class AnthropicAdapter implements ILLMProvider {
 
         try {
             const stream = await this.client.messages.create({
-                model: 'claude-3-5-sonnet-20240620',
+                model: this.model,
                 max_tokens: 4096,
                 system: prompt.systemPrompt,
                 messages,

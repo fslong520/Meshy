@@ -10,25 +10,15 @@ export async function runMeshy(prompt: string) {
     const config = loadConfig();
     console.log(`[Meshy] Loaded Config. Provider: ${config.provider}`);
 
-    // 2. Initialize the Provider Gateway
-    let provider: ILLMProvider;
-    if (config.provider === 'openai') {
-        const apiKey = config.apiKeys.openai || process.env.OPENAI_API_KEY;
-        if (!apiKey) throw new Error('OpenAI API Key is missing.');
-        provider = new OpenAIAdapter(apiKey, config.models.default);
-    } else if (config.provider === 'anthropic') {
-        const apiKey = config.apiKeys.anthropic || process.env.ANTHROPIC_API_KEY;
-        if (!apiKey) throw new Error('Anthropic API Key is missing.');
-        provider = new AnthropicAdapter(apiKey);
-    } else {
-        throw new Error(`Unsupported provider: ${config.provider}`);
-    }
+    // 2. Initialize the Provider Resolver
+    const { ProviderResolver } = await import('./core/llm/resolver.js');
+    const providerResolver = new ProviderResolver(config);
 
     // 3. Initialize Session & Blackboard
     const session = new Session('session-' + Date.now());
 
     // 4. Start Task Engine
-    const engine = new TaskEngine(provider, session, {
+    const engine = new TaskEngine(providerResolver, session, {
         maxRetries: config.system.maxRetries
     });
 

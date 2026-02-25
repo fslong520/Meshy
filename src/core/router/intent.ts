@@ -11,6 +11,7 @@
  */
 
 import { ILLMProvider } from '../llm/provider.js';
+import { ProviderResolver } from '../llm/resolver.js';
 
 // ─── 意图类型枚举 ───
 export type IntentCategory =
@@ -143,10 +144,10 @@ function classifyByKeywords(userInput: string): RoutingDecision {
  * 通过 `classifyByLLM` 分支走更精准的判定。
  */
 export class IntentRouter {
-    private smallLLM?: ILLMProvider;
+    private providerResolver?: ProviderResolver;
 
-    constructor(smallLLM?: ILLMProvider) {
-        this.smallLLM = smallLLM;
+    constructor(providerResolver?: ProviderResolver) {
+        this.providerResolver = providerResolver;
     }
 
     /**
@@ -162,8 +163,8 @@ export class IntentRouter {
             return localResult;
         }
 
-        // 如果有小模型可用且置信度低，走 LLM 辅助判定
-        if (this.smallLLM) {
+        // 如果有 ProviderResolver 且置信度低，走 LLM 辅助判定
+        if (this.providerResolver) {
             return this.classifyByLLM(userInput, localResult);
         }
 
@@ -178,12 +179,13 @@ export class IntentRouter {
         userInput: string,
         fallback: RoutingDecision
     ): Promise<RoutingDecision> {
-        if (!this.smallLLM) return fallback;
+        if (!this.providerResolver) return fallback;
+        const llm = this.providerResolver.getProvider('intent_routing');
 
         try {
             let responseText = '';
 
-            await this.smallLLM.generateResponseStream(
+            await llm.generateResponseStream(
                 {
                     systemPrompt: `You are an intent classifier. Classify the user's input into one of these categories:
 code_edit, code_search, code_generate, debug, explain, general_chat, info_retrieval, task_planning.

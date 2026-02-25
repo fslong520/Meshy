@@ -1,4 +1,5 @@
 import { ILLMProvider, StandardPrompt } from '../llm/provider.js';
+import { ProviderResolver } from '../llm/resolver.js';
 import { AgentComputerInterface } from '../aci/index.js';
 import { Session } from '../session/state.js';
 import { IntentRouter } from '../router/intent.js';
@@ -25,7 +26,7 @@ export interface EngineOptions {
 const BASE_SYSTEM_PROMPT = 'You are Meshy, an advanced multi-agent AI assistant. Utilize tools carefully to assist the user.';
 
 export class TaskEngine {
-    private llm: ILLMProvider;
+    private providerResolver: ProviderResolver;
     private aci: AgentComputerInterface;
     private session: Session;
     private maxRetries: number;
@@ -48,8 +49,8 @@ export class TaskEngine {
     // Tool System
     private toolRegistry: ToolRegistry;
 
-    constructor(llm: ILLMProvider, session: Session, options: EngineOptions = {}) {
-        this.llm = llm;
+    constructor(providerResolver: ProviderResolver, session: Session, options: EngineOptions = {}) {
+        this.providerResolver = providerResolver;
         this.session = session;
         this.aci = new AgentComputerInterface();
 
@@ -57,7 +58,7 @@ export class TaskEngine {
         this.maxRetries = options.maxRetries || config.system.maxRetries || 3;
 
         // Phase 2 init
-        this.router = new IntentRouter();
+        this.router = new IntentRouter(this.providerResolver);
         this.skillRegistry = new SkillRegistry();
         this.subagentRegistry = new SubagentRegistry();
         this.toolRegistry = createDefaultRegistry();
@@ -76,7 +77,7 @@ export class TaskEngine {
 
         // Phase 4 init
         this.memoryStore = new MemoryStore();
-        this.reflectionEngine = new ReflectionEngine(this.llm, this.memoryStore);
+        this.reflectionEngine = new ReflectionEngine(this.providerResolver.getProvider(), this.memoryStore);
 
         // Tool System init: 注册内置工具 + ACI 工具
         this.toolRegistry = createDefaultRegistry();
@@ -116,7 +117,7 @@ export class TaskEngine {
         if (catalogAdvert) promptParts.push(catalogAdvert);
         const basePrompt = promptParts.join('\n\n');
 
-        const injection = this.injector.resolve(userPrompt, decision, basePrompt, this.session);
+        const injection = await this.injector.resolve(userPrompt, decision, basePrompt, this.session, this.providerResolver);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }
@@ -139,7 +140,14 @@ export class TaskEngine {
                 const currentToolCall: { id: string; name: string; rawArgs: string } = { id: '', name: '', rawArgs: '' };
                 let fullResponseText = '';
 
-                await this.llm.generateResponseStream(prompt, (event) => {
+                let activeLLM: ILLMProvider;
+                if (injection.subagent && injection.subagent.model) {
+                    activeLLM = this.providerResolver.getProvider(injection.subagent.model);
+                } else {
+                    activeLLM = this.providerResolver.getProvider();
+                }
+
+                await activeLLM.generateResponseStream(prompt, (event) => {
                     if (event.type === 'text') {
                         fullResponseText += event.data;
                         process.stdout.write(event.data);

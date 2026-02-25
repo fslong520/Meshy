@@ -19,6 +19,7 @@ import { RoutingDecision } from '../router/intent.js';
 import { Session } from '../session/state.js';
 import { ToolRegistry } from '../tool/registry.js';
 import { ToolPackRegistry } from '../tool/tool-pack.js';
+import { ProviderResolver } from '../llm/resolver.js';
 
 /** ToolRAG Top-K 默认值 */
 const DEFAULT_RAG_TOP_K = 8;
@@ -52,14 +53,15 @@ export class LazyInjector {
 
     /**
      * 根据路由决策和用户输入，动态组装需要注入的工具与 Prompt。
-     * 工具预绑定流程：ToolPack 确定性匹配 → ToolRAG 模糊检索 → Pin 合并
+     * 工具预绑定流程：ToolPack 确定性匹配 → ToolRAG 模糊检索 (通过小模型 Query 改写) → Pin 合并
      */
-    public resolve(
+    public async resolve(
         userInput: string,
         decision: RoutingDecision,
         baseSystemPrompt: string,
         session: Session,
-    ): InjectionResult {
+        providerResolver: ProviderResolver,
+    ): Promise<InjectionResult> {
         // 1. 检查是否有 @subagent 显式唤醒
         const { agent, cleanInput } = this.subagentRegistry.resolveAtMention(userInput);
         if (agent) {
@@ -87,8 +89,43 @@ export class LazyInjector {
             ragToolIds = this.toolPackRegistry.collectToolIds(matchedPacks);
         } else if (catalog.getAllEntries().length > DEFAULT_RAG_TOP_K) {
             // 大规模 Catalog 且无包命中 → ToolRAG BM25 检索
+            let rewrittenQuery = userInput;
+
+            // 提取最近的 AI 回复作为上下文
+            let recentContext = '';
+            for (let i = session.history.length - 1; i >= 0; i--) {
+                const msg = session.history[i];
+                if (msg.role === 'assistant' && typeof msg.content === 'string') {
+                    // 取最后一次文本回复
+                    recentContext = msg.content.substring(0, 500); // 取前 500 字符
+                    break;
+                }
+            }
+
+            try {
+                const llm = providerResolver.getProvider('tool_query_rewrite');
+                let responseText = '';
+                await llm.generateResponseStream({
+                    systemPrompt: 'You are a query rewriting assistant. Extract technical keywords and synonyms from the user query to retrieve relevant programming tools or skills. Reply only with the space-separated keywords.',
+                    messages: [
+                        { role: 'user', content: `Context: ${recentContext}\nUser Query: ${userInput}` }
+                    ]
+                }, (event) => {
+                    if (event.type === 'text') {
+                        responseText += event.data;
+                    }
+                });
+
+                if (responseText.trim().length > 0) {
+                    rewrittenQuery = responseText.trim();
+                    console.log(`[LazyInjector] Query Rewritten: ${rewrittenQuery}`);
+                }
+            } catch (err) {
+                console.warn(`[LazyInjector] Query rewrite failed, falling back to original input. Error:`, err);
+            }
+
             const ragIndex = catalog.getRagIndex();
-            ragToolIds = ragIndex.search(userInput, DEFAULT_RAG_TOP_K);
+            ragToolIds = ragIndex.search(rewrittenQuery, DEFAULT_RAG_TOP_K);
         } else {
             // 小规模 Catalog → 全量激活
             ragToolIds = catalog.getAllEntries().map(e => e.id);
