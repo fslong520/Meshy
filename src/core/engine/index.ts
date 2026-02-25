@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 import { executeDelegate } from '../tool/delegate-tool.js';
 import { McpHostRuntime } from '../mcp/host.js';
+import { SnapshotManager } from '../session/snapshot.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -57,6 +58,9 @@ export class TaskEngine {
     // MCP Host
     private mcpHost: McpHostRuntime;
 
+    // Snapshot Manager (Phase 5)
+    private snapshotManager: SnapshotManager;
+
     constructor(providerResolver: ProviderResolver, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
         this.session = session;
@@ -89,9 +93,10 @@ export class TaskEngine {
         this.memoryStore = new MemoryStore(process.cwd(), embeddingProvider);
         this.reflectionEngine = new ReflectionEngine(this.providerResolver.getProvider(), this.memoryStore);
 
-        // Phase 5 init (MCP)
+        // Phase 5 init (MCP & Snapshot)
         this.mcpHost = new McpHostRuntime(process.cwd());
         this.mcpHost.loadConfig();
+        this.snapshotManager = new SnapshotManager(process.cwd());
 
         // Tool System init: 注册内置工具 + ACI 工具
         this.toolRegistry = createDefaultRegistry();
@@ -248,6 +253,42 @@ export class TaskEngine {
         }
 
         await this.runLLMLoop(injection);
+
+        // 如果全部完成，清除快照以防下次误报
+        this.snapshotManager.clearSnapshot(this.session.id);
+    }
+
+    /**
+     * 恢复由于崩溃或手动中断（Ctrl+C）遗留的旧会话。
+     * 直接进入带有额外系统提示的 LLM 推理循环。
+     */
+    public async resumeTask(): Promise<void> {
+        console.log(`[Engine] Resuming interrupted session: ${this.session.id}`);
+
+        // Phase 4 & 5 依赖初始化
+        await this.memoryStore.initialize();
+        await this.mcpHost.ensureAutoStartServers();
+
+        // 重新获取 catalog 和 mcp
+        const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
+        const mcpSummaries = this.mcpHost.getServerSummaries();
+        const mcpAdvert = mcpSummaries.length > 0
+            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+            : '';
+
+        const resumePrompt = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+            .withRoutingHint('CRITICAL: The previous execution of this session was abruptly interrupted. Review your history context carefully and pick up exactly where you left off.')
+            .withCatalogAdvert((catalogAdvert + mcpAdvert).trim())
+            .build();
+
+        // 直接发起 LLM Loop 续接
+        await this.runLLMLoop({
+            systemPrompt: resumePrompt,
+            tools: [], // 工具列表在 runLLMLoop 中再组装
+            subagent: null as any // 恢复暂不支持 subagent 上下文
+        });
+
+        this.snapshotManager.clearSnapshot(this.session.id);
     }
 
     /**
@@ -317,6 +358,9 @@ export class TaskEngine {
                     },
                 });
 
+                // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
+                this.snapshotManager.snapshot(this.session);
+
                 const result = await this.executeTool(currentToolCall.name, parsedArgs);
                 this.daemon?.broadcast('agent:tool_result', { tool: currentToolCall.name, success: true });
                 this.session.addMessage({
@@ -327,6 +371,9 @@ export class TaskEngine {
                         content: result,
                     },
                 });
+
+                // Phase 5: 响应也写入快照
+                this.snapshotManager.snapshot(this.session);
 
             } catch (err: unknown) {
                 retries++;
