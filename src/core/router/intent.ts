@@ -33,8 +33,9 @@ export interface RoutingDecision {
     intent: IntentCategory;
     modelTier: ModelTier;
     systemPromptHint: string;
-    suggestedSkills: string[];   // 建议挂载的 Skill 名称
-    confidence: number;          // 0~1
+    suggestedSkills: string[];       // 建议挂载的 Skill 名称
+    suggestedToolPacks?: string[];   // 建议挂载的 ToolPack 名称
+    confidence: number;              // 0~1
 }
 
 // ─── 关键词规则表 ───
@@ -139,9 +140,7 @@ function classifyByKeywords(userInput: string): RoutingDecision {
 /**
  * IntentRouter — 系统前置意图路由器
  *
- * 当前版本使用纯关键词匹配（零成本）。
- * 未来可接入本地小模型（如 Ollama 1.5B）做深度语义分析，
- * 通过 `classifyByLLM` 分支走更精准的判定。
+ * 双轨判定：纯关键词匹配（零成本） + 可选的小模型结构化 Tool Calling 深度分析。
  */
 export class IntentRouter {
     private providerResolver?: ProviderResolver;
@@ -173,7 +172,7 @@ export class IntentRouter {
 
     /**
      * 使用小模型进行深度意图分析（可选路径）。
-     * 将用户输入发给小模型，要求它返回结构化的意图分类 JSON。
+     * 通过 Tool Calling 让小模型返回结构化的意图分类，避免原始文本解析不稳定。
      */
     private async classifyByLLM(
         userInput: string,
@@ -182,34 +181,62 @@ export class IntentRouter {
         if (!this.providerResolver) return fallback;
         const llm = this.providerResolver.getProvider('intent_routing');
 
+        const classifyTool = {
+            name: 'classify_intent',
+            description: 'Classify user intent into a structured category',
+            inputSchema: {
+                type: 'object' as const,
+                properties: {
+                    intent: {
+                        type: 'string',
+                        enum: [
+                            'code_edit', 'code_search', 'code_generate',
+                            'debug', 'explain', 'general_chat',
+                            'info_retrieval', 'task_planning',
+                        ],
+                        description: 'The classified intent category',
+                    },
+                    confidence: {
+                        type: 'number',
+                        description: 'Confidence score between 0 and 1',
+                    },
+                    suggestedSkills: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Relevant skill names to activate',
+                    },
+                },
+                required: ['intent', 'confidence'],
+            },
+        };
+
         try {
-            let responseText = '';
+            let toolCallArgs = '';
 
             await llm.generateResponseStream(
                 {
-                    systemPrompt: `You are an intent classifier. Classify the user's input into one of these categories:
-code_edit, code_search, code_generate, debug, explain, general_chat, info_retrieval, task_planning.
-Respond ONLY with a JSON object: {"intent": "<category>", "confidence": <0-1>}`,
+                    systemPrompt: 'You are an intent classifier. Analyze the user input and call the classify_intent tool with the appropriate category and confidence.',
                     messages: [{ role: 'user', content: userInput }],
+                    tools: [classifyTool],
                 },
                 (event) => {
-                    if (event.type === 'text') {
-                        responseText += event.data;
+                    if (event.type === 'tool_call_chunk') {
+                        toolCallArgs += event.data;
                     }
                 }
             );
 
-            const parsed = JSON.parse(responseText.trim());
-            const intent = parsed.intent as IntentCategory;
+            if (!toolCallArgs) return fallback;
 
-            // 从规则表找到对应的 modelTier 和 hint
+            const parsed = JSON.parse(toolCallArgs);
+            const intent = parsed.intent as IntentCategory;
             const matchedRule = KEYWORD_RULES.find(r => r.intent === intent);
 
             return {
                 intent,
                 modelTier: matchedRule?.modelTier ?? 'default',
                 systemPromptHint: matchedRule?.systemPromptHint ?? '',
-                suggestedSkills: matchedRule?.suggestedSkills ?? [],
+                suggestedSkills: parsed.suggestedSkills ?? matchedRule?.suggestedSkills ?? [],
                 confidence: parsed.confidence ?? 0.5,
             };
         } catch {
