@@ -24,6 +24,7 @@ import { WorkerAgent } from './worker.js';
 import { SecurityGuard } from '../security/guard.js';
 import { ExecutionMode as SecurityExecutionMode } from '../security/modes.js';
 import { SessionManager } from '../session/manager.js';
+import { WorkflowEngine, loadWorkflows } from '../workflow/engine.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -134,6 +135,7 @@ export class TaskEngine {
                     '  /plan <task>      — Plan mode, output structured steps',
                     '  /model [target]   — List providers or switch model (e.g. /model zeabur/gpt-5.2)',
                     '  /session <cmd>    — Session management (list / save / load <id> / archive)',
+                    '  /workflow <cmd>   — Workflow management (list / run <name>)',
                     '  /clear            — Clear current session',
                     '  /undo             — Roll back last edit',
                     '  /test             — Run tests',
@@ -209,6 +211,82 @@ export class TaskEngine {
                         break;
                     default:
                         console.log('[Session] Unknown sub-command. Use: list, save, load <id>, archive');
+                }
+                break;
+            }
+
+            case 'workflow': {
+                const subCmd = (command.args || '').trim().split(/\s+/);
+                const action = subCmd[0] || 'list';
+                const workflows = loadWorkflows(this.workspace.rootPath);
+
+                switch (action) {
+                    case 'list': {
+                        if (workflows.length === 0) {
+                            console.log('[Workflow] No workflows found in .meshy/workflows/');
+                        } else {
+                            console.log('\n  Available Workflows:');
+                            for (const wf of workflows) {
+                                console.log(`    • ${wf.name} — ${wf.description || 'No description'}`);
+                                console.log(`      Steps: ${wf.steps.map(s => s.name).join(' -> ')}`);
+                            }
+                        }
+                        break;
+                    }
+                    case 'run': {
+                        const targetName = subCmd[1];
+                        if (!targetName) {
+                            console.log('[Workflow] Usage: /workflow run <workflow-name>');
+                            break;
+                        }
+
+                        const wf = workflows.find(w => w.name === targetName);
+                        if (!wf) {
+                            console.log(`[Workflow] Workflow "${targetName}" not found.`);
+                            break;
+                        }
+
+                        const initialInput = command.args.replace(/^run\s+[^\s]+\s*/, '');
+                        console.log(`\n[Workflow] Starting pipeline: ${wf.name}...`);
+
+                        // Bridge WorkflowEngine with WorkerAgent
+                        const engine = new WorkflowEngine(
+                            async (step: import('../workflow/engine.js').StepDefinition, input: string) => {
+                                const agentConfig = step.agent
+                                    ? this.subagentRegistry.getAgent(step.agent)
+                                    : this.subagentRegistry.getAgent('coder'); // default
+
+                                if (!agentConfig) throw new Error(`Agent not found: ${step.agent || 'coder'}`);
+
+                                const workerGuard = new SecurityGuard(
+                                    (this.sandbox.getMode() as unknown as SecurityExecutionMode) ?? SecurityExecutionMode.SMART
+                                );
+                                const worker = new WorkerAgent(agentConfig, this.workspace, this.toolRegistry, this.providerResolver, workerGuard);
+
+                                const fullPrompt = `${step.promptTemplate}\n\n[Input]\n${input}`;
+                                return await worker.execute(fullPrompt, { parentSession: this.session });
+                            }
+                        );
+
+                        try {
+                            const results = await engine.run(wf, initialInput);
+                            console.log(`\n[Workflow] Pipeline "${wf.name}" completed successfully.`);
+                            // Report results back to main session
+                            let report = `Workflow "${wf.name}" execution report:\n`;
+                            for (const [stepId, state] of results.entries()) {
+                                report += `\n--- Step: ${stepId} [${state.status}] ---\n${state.output}\n`;
+                            }
+                            this.session.addMessage({ role: 'assistant', content: report });
+                            this.daemon?.broadcast('agent:text', report);
+                        } catch (err: unknown) {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            console.error(`\n[Workflow] Pipeline failed: ${msg}`);
+                            this.session.addMessage({ role: 'assistant', content: `Workflow execution failed: ${msg}` });
+                        }
+                        break;
+                    }
+                    default:
+                        console.log('[Workflow] Unknown sub-command. Use: list, run <name>');
                 }
                 break;
             }
@@ -427,7 +505,12 @@ export class TaskEngine {
                     tools: allTools,
                 };
 
-                const currentToolCall: { id: string; name: string; rawArgs: string } = { id: '', name: '', rawArgs: '' };
+                interface PendingToolCall {
+                    id: string;
+                    name: string;
+                    rawArgs: string;
+                }
+                const pendingToolCalls: PendingToolCall[] = [];
                 let fullResponseText = '';
 
                 let activeLLM: ILLMProvider;
@@ -443,13 +526,14 @@ export class TaskEngine {
                         process.stdout.write(event.data);
                         this.daemon?.broadcast('agent:text', event.data);
                     } else if (event.type === 'tool_call_start') {
-                        currentToolCall.id = event.data.id;
-                        currentToolCall.name = event.data.name;
-                        currentToolCall.rawArgs = '';
-                        process.stdout.write(`\n[Agent]: Calling tool "${currentToolCall.name}"...\n`);
-                        this.daemon?.broadcast('agent:tool_call', { id: currentToolCall.id, name: currentToolCall.name });
+                        const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
+                        pendingToolCalls.push(newCall);
+                        process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
+                        this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
                     } else if (event.type === 'tool_call_chunk') {
-                        currentToolCall.rawArgs += event.data;
+                        if (pendingToolCalls.length > 0) {
+                            pendingToolCalls[pendingToolCalls.length - 1].rawArgs += event.data;
+                        }
                     } else if (event.type === 'done') {
                         isDone = true;
                     } else if (event.type === 'error') {
@@ -457,37 +541,52 @@ export class TaskEngine {
                     }
                 });
 
-                if (!currentToolCall.id) {
+                if (pendingToolCalls.length === 0) {
                     this.session.addMessage({ role: 'assistant', content: fullResponseText });
                     isDone = true;
                     break;
                 }
 
                 isDone = false;
-                const parsedArgs = currentToolCall.rawArgs ? JSON.parse(currentToolCall.rawArgs) : {};
-                this.session.addMessage({
-                    role: 'assistant',
-                    content: {
-                        type: 'tool_call',
-                        id: currentToolCall.id,
-                        name: currentToolCall.name,
-                        arguments: parsedArgs,
-                    },
-                });
+
+                // 1. Add ALL tool_call messages to history first
+                for (const call of pendingToolCalls) {
+                    const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
+                    this.session.addMessage({
+                        role: 'assistant',
+                        content: {
+                            type: 'tool_call',
+                            id: call.id,
+                            name: call.name,
+                            arguments: parsedArgs,
+                        },
+                    });
+                }
 
                 // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
                 this.workspace.snapshotManager.snapshot(this.session);
 
-                const result = await this.executeTool(currentToolCall.name, parsedArgs);
-                this.daemon?.broadcast('agent:tool_result', { tool: currentToolCall.name, success: true });
-                this.session.addMessage({
-                    role: 'user',
-                    content: {
-                        type: 'tool_result',
-                        id: currentToolCall.id,
-                        content: result,
-                    },
+                // 2. Execute ALL tools concurrently
+                const executionPromises = pendingToolCalls.map(async (call) => {
+                    const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
+                    const result = await this.executeTool(call.name, parsedArgs);
+                    this.daemon?.broadcast('agent:tool_result', { tool: call.name, success: true });
+                    return { id: call.id, result };
                 });
+
+                const results = await Promise.all(executionPromises);
+
+                // 3. Add ALL tool_result messages to history in order
+                for (const { id, result } of results) {
+                    this.session.addMessage({
+                        role: 'user',
+                        content: {
+                            type: 'tool_result',
+                            id: id,
+                            content: result,
+                        },
+                    });
+                }
 
                 // Phase 5: 响应也写入快照
                 this.workspace.snapshotManager.snapshot(this.session);

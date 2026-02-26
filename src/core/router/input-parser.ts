@@ -21,6 +21,7 @@ export type SlashCommandType =
     | 'compact'    // 压缩对话历史
     | 'model'      // 查看/切换模型
     | 'session'    // 会话管理 (list/save/load/archive)
+    | 'workflow'   // 触发自动工作流流水线
     | 'help';      // 显示帮助
 
 export interface SlashCommand {
