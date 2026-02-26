@@ -178,6 +178,7 @@ export class TaskEngine {
                     '  /undo             — Roll back last edit',
                     '  /test             — Run tests',
                     '  /compact          — Compress conversation history',
+                    '  /feedback <+|->   — Thumbs up/down for current session (triggers reflection)',
                     '  /help             — Show this help',
                 ].join('\n'));
                 // Phase 15: 列出自定义命令
@@ -386,6 +387,34 @@ export class TaskEngine {
                     await this.runLLMLoop(injection);
                 }
                 break;
+
+            case 'feedback': {
+                const arg = (command.args || '').trim().toLowerCase();
+                const feedbackType: FeedbackType | null =
+                    (arg === '+' || arg === 'positive' || arg === 'up' || arg === 'good')
+                        ? 'thumbs_up'
+                        : (arg === '-' || arg === 'negative' || arg === 'down' || arg === 'bad')
+                            ? 'thumbs_down'
+                            : null;
+
+                if (!feedbackType) {
+                    console.log('[Feedback] Usage: /feedback <+|-> or /feedback <positive|negative>');
+                    console.log('  Examples: /feedback +   /feedback negative');
+                    break;
+                }
+
+                const icon = feedbackType === 'thumbs_up' ? '👍' : '👎';
+                console.log(`${icon} Feedback recorded: ${feedbackType}`);
+
+                try {
+                    await this.workspace.reflectionEngine.onUserFeedback(this.session, feedbackType);
+                    console.log('[Feedback] Reflection capsule created from session experience.');
+                } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.error(`[Feedback] Failed to process: ${msg}`);
+                }
+                break;
+            }
         }
     }
 

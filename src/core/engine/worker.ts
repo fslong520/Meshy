@@ -7,6 +7,8 @@ import { Workspace } from '../workspace/workspace.js';
 import { SystemPromptBuilder } from '../router/prompt-builder.js';
 import { SecurityGuard } from '../security/guard.js';
 import { ExecutionMode } from '../security/modes.js';
+import path from 'path';
+import fs from 'fs';
 
 export interface WorkerOptions {
     parentSession?: Session;
@@ -16,6 +18,8 @@ export interface WorkerOptions {
     injectedTools?: StandardTool[];
     /** 用户显式加载的额外 Prompt (如技能 Markdown Body) */
     injectedPrompt?: string;
+    /** Phase 17: 是否启用隔离 Workspace（默认 false，共享主 Workspace） */
+    isolateWorkspace?: boolean;
 }
 
 /**
@@ -28,6 +32,8 @@ export class WorkerAgent {
     public readonly session: Session;
     private maxRetries = 10;
     private securityGuard: SecurityGuard;
+    /** Phase 17: Worker 的实际工作目录（可能为隔离路径或主 Workspace） */
+    private effectiveRootPath: string;
 
     constructor(
         private config: SubagentConfig,
@@ -38,6 +44,7 @@ export class WorkerAgent {
     ) {
         this.session = new Session(`worker-${config.name}-${Date.now()}`);
         this.securityGuard = securityGuard ?? new SecurityGuard(ExecutionMode.SMART);
+        this.effectiveRootPath = workspace.rootPath;
     }
 
     /**
@@ -45,6 +52,16 @@ export class WorkerAgent {
      */
     public async execute(taskDescription: string, options?: WorkerOptions): Promise<string> {
         console.log(`\n[WorkerAgent] Starting ephemeral worker: @${this.config.name}`);
+
+        // Phase 17: 决定是否启用隔离 Workspace
+        if (options?.isolateWorkspace) {
+            const isolatedDir = path.join(
+                this.workspace.rootPath, '.meshy', 'workspaces', this.config.name,
+            );
+            fs.mkdirSync(isolatedDir, { recursive: true });
+            this.effectiveRootPath = isolatedDir;
+            console.log(`[WorkerAgent] Isolated workspace: ${isolatedDir}`);
+        }
 
         // 1. 构建精简的局部上下文 (Local Context)
         if (options?.parentSession) {
@@ -190,7 +207,7 @@ export class WorkerAgent {
             }
             const result = await this.toolRegistry.execute(name, args, {
                 sessionId: this.session.id,
-                workspaceRoot: process.cwd(),
+                workspaceRoot: this.effectiveRootPath,
                 session: this.session,
             });
             return result.output;
