@@ -17,6 +17,7 @@
 import { ILLMProvider } from '../llm/provider.js';
 import { Session } from '../session/state.js';
 import { MemoryStore, Capsule } from '../memory/store.js';
+import { MemoryConsolidationAgent } from './consolidation.js';
 
 // ─── 反馈类型 ───
 export type FeedbackType = 'thumbs_up' | 'thumbs_down';
@@ -92,6 +93,12 @@ export class ReflectionEngine {
             });
 
             console.log(`[Reflection] Capsule #${capsuleId} saved: "${extracted.summary.slice(0, 60)}..."`);
+
+            // Phase 19: Trigger background memory consolidation
+            const consolidator = new MemoryConsolidationAgent(this.llm, this.memoryStore);
+            consolidator.consolidate(5).catch(err => {
+                console.error('[Reflection] Background consolidation failed:', err);
+            });
 
             return {
                 capsuleId,

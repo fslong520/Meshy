@@ -28,6 +28,7 @@ export class SystemPromptBuilder {
     private contextBlocks: string[] = [];
     private constraints: string[] = [];
     private ritualContext: string | null = null;
+    private userProfile: string | null = null;
 
     constructor(basePrompt: string) {
         this.basePrompt = basePrompt;
@@ -91,6 +92,12 @@ export class SystemPromptBuilder {
         return this;
     }
 
+    /** Phase 19: 注入经过提炼的 User Profile (长记忆) */
+    withUserProfile(profile: string): this {
+        this.userProfile = profile;
+        return this;
+    }
+
     /** 组装最终的 System Prompt 字符串 */
     build(): string {
         const parts: string[] = [];
@@ -103,6 +110,11 @@ export class SystemPromptBuilder {
         // 1.5 Ritual 上下文（人格指令）
         if (this.ritualContext) {
             parts.push(this.ritualContext);
+        }
+
+        // 1.8 User Profile (长记忆潜意识)
+        if (this.userProfile) {
+            parts.push(`\n[System Constraints & User Profile]\nThe following rules are extracted from your long-term memory about the user and their preferences:\n${this.userProfile}\n`);
         }
 
         // 2. RepoMap

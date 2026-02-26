@@ -511,6 +511,12 @@ export class TaskEngine {
             builder.withRitualContext(ritualContext);
         }
 
+        // Phase 19: User Profile (长记忆潜意识) 注入
+        const userProfile = await this.workspace.memoryStore.getUserProfile();
+        if (userProfile) {
+            builder.withUserProfile(userProfile);
+        }
+
         // 注入 @file: 引用的文件内容到上下文
         for (const mention of parsed.mentions) {
             if (mention.namespace === 'file') {
@@ -600,10 +606,17 @@ export class TaskEngine {
             ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map((s: any) => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
             : '';
 
-        const resumePrompt = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+        const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
             .withRoutingHint('CRITICAL: The previous execution of this session was abruptly interrupted. Review your history context carefully and pick up exactly where you left off.')
-            .withCatalogAdvert((catalogAdvert + mcpAdvert).trim())
-            .build();
+            .withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+
+        // Phase 19: User Profile (长记忆潜意识) 注入
+        const userProfile = await this.workspace.memoryStore.getUserProfile();
+        if (userProfile) {
+            builder.withUserProfile(userProfile);
+        }
+
+        const resumePrompt = builder.build();
 
         // 直接发起 LLM Loop 续接
         await this.runLLMLoop({
@@ -735,6 +748,16 @@ export class TaskEngine {
                     role: 'user',
                     content: `System Error: ${message}. Please self-correct or ask the user for help.`,
                 });
+
+                // Phase 19: Aggressive context compression on sequential errors
+                if (retries >= 2) {
+                    try {
+                        console.log(`\n[Engine] High retry count detected. Triggering forced context compaction to save context window...`);
+                        await this.compactionAgent.compact(this.session);
+                    } catch (e) {
+                        this.logger.error('ENGINE', `Forced compaction failed during retry loop: ${e}`);
+                    }
+                }
             }
         }
 

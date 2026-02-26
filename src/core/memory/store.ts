@@ -219,6 +219,18 @@ export class MemoryStore {
     }
 
     // ═══════════════════════════════════════════
+    // User Profile (Long-Term Memory)
+    // ═══════════════════════════════════════════
+
+    public async getUserProfile(): Promise<string | null> {
+        return this.getPreference('user_profile_system_prompt');
+    }
+
+    public async updateUserProfile(content: string): Promise<void> {
+        await this.setPreference('user_profile_system_prompt', content);
+    }
+
+    // ═══════════════════════════════════════════
     // Internal Helpers
     // ═══════════════════════════════════════════
 

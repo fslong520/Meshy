@@ -15,17 +15,17 @@ import { Session } from './state.js';
 import { getLogger } from '../logger/index.js';
 
 // ─── 配置常量 ───
-const COMPACTION_THRESHOLD = 40;  // 超过此条数触发压缩
+const COMPACTION_THRESHOLD = 20;  // 相较于之前 40，提前截断防止过长 session OOM
 const KEEP_RECENT = 10;           // 保留最近 N 条消息
 
-const COMPACTION_SYSTEM_PROMPT = `You are a context compactor. Summarize the conversation below into a concise summary that preserves:
-1. Key decisions made and their rationale
-2. Files that were modified (with paths)
-3. Current task status and remaining work
-4. Any errors encountered and how they were resolved
-5. User preferences expressed
+const COMPACTION_SYSTEM_PROMPT = `You are a context compactor for an Agent system. Your goal is to drastically compress the provided conversation history into EXTREMELY concise bullet points.
 
-Output a clear, structured summary in markdown format. Be concise but thorough.`;
+Rules:
+1. Use markdown bullet points. NO conversational filler. NO paragraphs.
+2. Preserve key structural decisions, the final status of tasks, and confirmed user preferences.
+3. If files were modified, just list "- File XYZ modified successfully". Do NOT include any code blocks.
+4. If errors occurred, do NOT copy the error trace or lengthy logs. Just list "- Error in XYZ: resolution was ABC".
+5. Max length of output is 150 words.`;
 
 export class CompactionAgent {
     private provider: ILLMProvider;
