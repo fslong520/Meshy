@@ -41,9 +41,10 @@ export interface EngineOptions {
 
 const BASE_SYSTEM_PROMPT = `You are Meshy, an advanced multi-agent AI framework orchestrating local development tasks.
 CRITICAL RULES:
-1. When asked to write, convert, or generate code/scripts, YOU MUST ALWAYS USE TOOLS (like 'write' or 'runCommand') to save the result to a physical file.
-2. DO NOT output massive blocks of code in your chat message unless the user explicitly requested it on the stdout/chat.
-3. Be precise, verify files before editing, and utilize your tools carefully to assist the user.`;
+1. When asked to write, convert, or generate code/scripts, YOU MUST ALWAYS USE TOOLS (like 'write' or 'runCommand' or 'editFile') to save the result to a physical file.
+2. DO NOT output massive blocks of code in your chat message unless you have already written it to a file. Users don't want to copy-paste.
+3. Be precise, verify files before editing, and utilize your tools carefully to assist the user.
+4. If you output code without saving it to a file, you will be heavily penalized.`;
 
 export class TaskEngine {
     private providerResolver: ProviderResolver;
@@ -525,6 +526,11 @@ export class TaskEngine {
         const userProfile = await this.workspace.memoryStore.getUserProfile();
         if (userProfile) {
             builder.withUserProfile(userProfile);
+        }
+
+        // Phase 20: 针对代码生成/修改意图的强制写文件约束
+        if (decision.intent === 'code_generate' || decision.intent === 'code_edit') {
+            builder.withConstraint("CRITICAL: You are generating or editing code. Your final response MUST entail calling 'write', 'editFile', or 'runCommand' to save the code to the filesystem. DO NOT JUST PRINT THE CODE.");
         }
 
         // 注入 @file: 引用的文件内容到上下文

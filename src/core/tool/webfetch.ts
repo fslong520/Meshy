@@ -7,9 +7,18 @@
 
 import { z } from 'zod';
 import { defineTool } from './define.js';
+import { fetch, ProxyAgent, RequestInit } from 'undici';
 
-const DEFAULT_MAX_LENGTH = 20_000;
+const DEFAULT_MAX_LENGTH = 500_000; // Increased to 500KB for Phase 20
 const DEFAULT_TIMEOUT_MS = 15_000;
+
+function getProxyAgent(): ProxyAgent | undefined {
+    const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+    if (proxyUrl) {
+        return new ProxyAgent(proxyUrl);
+    }
+    return undefined;
+}
 
 /**
  * 简易 HTML → 纯文本转换。
@@ -58,13 +67,35 @@ export const WebFetchTool = defineTool('webfetch', {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
-            const response = await fetch(params.url, {
+            const dispatcher = getProxyAgent();
+            const fetchOptions: RequestInit = {
                 signal: controller.signal,
                 headers: {
                     'User-Agent': 'Meshy/1.0 (AI Assistant)',
                     'Accept': 'text/html, text/plain, application/json, */*',
                 },
-            });
+                dispatcher
+            };
+
+            // 1. HEAD pre-check
+            try {
+                const headResponse = await fetch(params.url, { ...fetchOptions, method: 'HEAD' });
+                if (headResponse.ok) {
+                    const contentLength = headResponse.headers.get('content-length');
+                    if (contentLength && parseInt(contentLength, 10) > maxLength * 2) {
+                        clearTimeout(timer);
+                        return {
+                            output: `Error: The file is extremely large (${contentLength} bytes) and exceeds the safety limit of ${maxLength * 2} bytes.`,
+                            metadata: { status: headResponse.status, contentLength }
+                        };
+                    }
+                }
+            } catch (e) {
+                // Some servers reject HEAD requests. Ignore and proceed to GET.
+            }
+
+            // 2. Full GET request
+            const response = await fetch(params.url, fetchOptions);
 
             clearTimeout(timer);
 
