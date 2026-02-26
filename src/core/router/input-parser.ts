@@ -58,6 +58,13 @@ export interface SymbolRef {
     raw: string;
 }
 
+// ─── + Skill Reference 定义 ───
+
+export interface SkillRef {
+    value: string;
+    raw: string;
+}
+
 // ─── 解析结果 ───
 
 export interface ParsedInput {
@@ -67,6 +74,8 @@ export interface ParsedInput {
     slashCommand: SlashCommand | null;
     /** 检测到的 @ 引用列表 */
     mentions: MentionRef[];
+    /** 检测到的 + 技能列表 */
+    skills: SkillRef[];
     /** 检测到的 # 符号引用列表 */
     symbolRefs: SymbolRef[];
 }
@@ -82,6 +91,12 @@ const VALID_SLASH_COMMANDS = new Set<SlashCommandType>([
  * 匹配 `@namespace:value` 或 `@value`（必须前面是空格或行首）
  */
 const MENTION_REGEX = /(?:^|\s)@((?:file|mcp|agent|skill|terminal):)?(\S+)/g;
+
+/**
+ * + Skill Ref 正则：
+ * 匹配 `+skillName`（必须前面是空格或行首）
+ */
+const SKILL_REGEX = /(?:^|\s)\+(\S+)/g;
 
 /**
  * # Symbol Ref 正则：
@@ -134,6 +149,19 @@ function parseMentions(input: string): MentionRef[] {
     return results;
 }
 
+/** 解析所有 + skills */
+function parseSkills(input: string): SkillRef[] {
+    const results: SkillRef[] = [];
+
+    for (const match of input.matchAll(SKILL_REGEX)) {
+        const value = match[1];
+        const raw = match[0].trim();
+        results.push({ value, raw });
+    }
+
+    return results;
+}
+
 /** 解析所有 # symbol references */
 function parseSymbolRefs(input: string): SymbolRef[] {
     const results: SymbolRef[] = [];
@@ -158,12 +186,17 @@ function parseSymbolRefs(input: string): SymbolRef[] {
 }
 
 /** 从输入中移除所有已识别的标记，返回纯净文本 */
-function cleanInput(input: string, mentions: MentionRef[], symbolRefs: SymbolRef[]): string {
+function cleanInput(input: string, mentions: MentionRef[], skills: SkillRef[], symbolRefs: SymbolRef[]): string {
     let cleaned = input;
 
     // 移除 @ 标记
     for (const m of mentions) {
         cleaned = cleaned.replace(m.raw, '');
+    }
+
+    // 移除 + 标记
+    for (const s of skills) {
+        cleaned = cleaned.replace(s.raw, '');
     }
 
     // 移除 # 标记
@@ -191,6 +224,7 @@ export class InputParser {
                 cleanText: slashCommand.args,
                 slashCommand,
                 mentions: [],
+                skills: [],
                 symbolRefs: [],
             };
         }
@@ -198,16 +232,20 @@ export class InputParser {
         // 2. @ Mentions
         const mentions = parseMentions(trimmed);
 
-        // 3. # Symbol Refs
+        // 3. + Skills
+        const skills = parseSkills(trimmed);
+
+        // 4. # Symbol Refs
         const symbolRefs = parseSymbolRefs(trimmed);
 
-        // 4. 清洗后的纯文本
-        const cleanText = cleanInput(trimmed, mentions, symbolRefs);
+        // 5. 清洗后的纯文本
+        const cleanText = cleanInput(trimmed, mentions, skills, symbolRefs);
 
         return {
             cleanText,
             slashCommand: null,
             mentions,
+            skills,
             symbolRefs,
         };
     }

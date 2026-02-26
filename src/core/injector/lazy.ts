@@ -56,21 +56,34 @@ export class LazyInjector {
      * 工具预绑定流程：ToolPack 确定性匹配 → ToolRAG 模糊检索 (通过小模型 Query 改写) → Pin 合并
      */
     public async resolve(
-        userInput: string,
+        parsed: import('../router/input-parser.js').ParsedInput,
         decision: RoutingDecision,
         baseSystemPrompt: string,
         session: Session,
         providerResolver: ProviderResolver,
     ): Promise<InjectionResult> {
         // 1. 检查是否有 @subagent 显式唤醒
-        const { agent, cleanInput } = this.subagentRegistry.resolveAtMention(userInput);
+        let agent: SubagentConfig | null = null;
+        for (const m of parsed.mentions) {
+            if (m.namespace === 'agent' || m.namespace === 'raw') {
+                const found = this.subagentRegistry.getAgent(m.value);
+                if (found) {
+                    agent = found;
+                    break;
+                }
+            }
+        }
+
         if (agent) {
             return this.buildSubagentInjection(agent, baseSystemPrompt);
         }
 
         // 2. 收集需要注入的技能 (Skills)
         const skillNames = new Set<string>(decision.suggestedSkills);
-        const searchHits = this.skillRegistry.searchByKeywords(userInput);
+        for (const s of parsed.skills) {
+            skillNames.add(s.value);
+        }
+        const searchHits = this.skillRegistry.searchByKeywords(parsed.cleanText);
         for (const hit of searchHits) {
             skillNames.add(hit.name);
         }
@@ -78,7 +91,7 @@ export class LazyInjector {
         // 3. ToolPack 确定性匹配（快速路径，跳过 RAG）
         const catalog = this.toolRegistry.getCatalog();
         const matchedPacks = this.toolPackRegistry.match(
-            userInput,
+            parsed.cleanText,
             (decision as any).suggestedToolPacks,
         );
 
@@ -89,7 +102,7 @@ export class LazyInjector {
             ragToolIds = this.toolPackRegistry.collectToolIds(matchedPacks);
         } else if (catalog.getAllEntries().length > DEFAULT_RAG_TOP_K) {
             // 大规模 Catalog 且无包命中 → ToolRAG BM25 检索
-            let rewrittenQuery = userInput;
+            let rewrittenQuery = parsed.cleanText;
 
             // 提取最近的 AI 回复作为上下文
             let recentContext = '';
@@ -108,7 +121,7 @@ export class LazyInjector {
                 await llm.generateResponseStream({
                     systemPrompt: 'You are a query rewriting assistant. Extract technical keywords and synonyms from the user query to retrieve relevant programming tools or skills. Reply only with the space-separated keywords.',
                     messages: [
-                        { role: 'user', content: `Context: ${recentContext}\nUser Query: ${userInput}` }
+                        { role: 'user', content: `Context: ${recentContext}\nUser Query: ${parsed.cleanText}` }
                     ]
                 }, (event) => {
                     if (event.type === 'text') {

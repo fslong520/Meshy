@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 import { executeDelegate } from '../tool/delegate-tool.js';
 import { Workspace } from '../workspace/workspace.js';
+import { WorkerAgent } from './worker.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -184,8 +185,9 @@ export class TaskEngine {
                     }
 
                     const basePrompt = builder.build();
+                    const parsedArgs = InputParser.parse(command.args);
                     const injection = await this.injector.resolve(
-                        command.args, decision, basePrompt, this.session, this.providerResolver,
+                        parsedArgs, decision, basePrompt, this.session, this.providerResolver,
                     );
 
                     // 进入正常的 LLM 推理循环
@@ -255,7 +257,49 @@ export class TaskEngine {
 
         const basePrompt = builder.build();
 
-        const injection = await this.injector.resolve(userPrompt, decision, basePrompt, this.session, this.providerResolver);
+        // Phase 9: 检查是否有针对具体 Agent 的强召（Worker Agent 拦截）
+        const agentMention = parsed.mentions.find(m => m.namespace === 'agent' || m.namespace === 'raw');
+        if (agentMention) {
+            const agentConfig = this.subagentRegistry.getAgent(agentMention.value);
+            if (agentConfig) {
+                // 由 TaskEngine (TeamLead) 衍生出独立的 Worker 开始工作，避开主链路
+                const worker = new WorkerAgent(agentConfig, this.workspace, this.toolRegistry, this.providerResolver);
+
+                // 将必要的工具依赖注入到 Subagent
+                const injectedTools: import('../llm/provider.js').StandardTool[] = [];
+                let injectedPrompt = '';
+                for (const s of parsed.skills) {
+                    const skill = this.skillRegistry.getSkill(s.value);
+                    if (skill) {
+                        const body = this.skillRegistry.getSkillBody(skill.name);
+                        if (body) injectedPrompt += `\n--- Skill: ${skill.name} ---\n${body}`;
+                        if (skill.tools) {
+                            injectedTools.push(...skill.tools.map(t => ({
+                                name: t.name,
+                                description: t.description,
+                                inputSchema: t.inputSchema
+                            })));
+                        }
+                    }
+                }
+
+                const report = await worker.execute(parsed.cleanText, {
+                    parentSession: this.session,
+                    injectedTools,
+                    injectedPrompt
+                });
+
+                // Orchestrator 收集汇报
+                this.session.addMessage({ role: 'assistant', content: `[Worker @${agentConfig.name} Report]\n${report}` });
+                this.daemon?.broadcast('agent:text', `\n[Worker @${agentConfig.name} Report]\n${report}\n`);
+
+                this.workspace.snapshotManager.clearSnapshot(this.session.id);
+                this.daemon?.broadcast('agent:done', {});
+                return;
+            }
+        }
+
+        const injection = await this.injector.resolve(parsed, decision, basePrompt, this.session, this.providerResolver);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }
@@ -523,7 +567,7 @@ export class TaskEngine {
 
         try {
             if (name.startsWith('mcp:')) {
-                return await this.mcpHost.callTool(name, args);
+                return await this.workspace.mcpHost.callTool(name, args);
             }
 
             const result = await this.toolRegistry.execute(name, args, {
