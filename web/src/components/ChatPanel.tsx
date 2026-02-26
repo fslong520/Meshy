@@ -1,0 +1,154 @@
+import { useRef, useEffect, useState, useCallback } from 'react'
+import { Search, ChevronUp, ChevronDown } from 'lucide-react'
+import type { ChatMessage } from '../store/ws'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
+interface Props {
+    messages: ChatMessage[];
+    onApproval: (id: string, approved: boolean) => void;
+}
+
+export function ChatPanel({ messages, onApproval }: Props) {
+    const scrollRef = useRef<HTMLDivElement>(null)
+    const [searchTerm, setSearchTerm] = useState('')
+    const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+
+    // 自动滚动到底部
+    useEffect(() => {
+        const el = scrollRef.current
+        if (el) el.scrollTop = el.scrollHeight
+    }, [messages])
+
+    // 用户消息快速跳转
+
+    const jumpToUserMsg = useCallback(
+        (direction: 'up' | 'down') => {
+            const el = scrollRef.current
+            if (!el) return
+
+            const msgElements = el.querySelectorAll('.chat-msg.user')
+            if (msgElements.length === 0) return
+
+            const currentScroll = el.scrollTop
+            const targets = Array.from(msgElements).map((e) => (e as HTMLElement).offsetTop)
+
+            if (direction === 'up') {
+                const prev = targets.reverse().find((t) => t < currentScroll - 10)
+                if (prev !== undefined) el.scrollTo({ top: prev - 8, behavior: 'smooth' })
+            } else {
+                const next = targets.find((t) => t > currentScroll + 50)
+                if (next !== undefined) el.scrollTo({ top: next - 8, behavior: 'smooth' })
+            }
+        },
+        [],
+    )
+
+    const toggleTool = (key: string) => {
+        setExpandedTools((prev) => {
+            const next = new Set(prev)
+            next.has(key) ? next.delete(key) : next.add(key)
+            return next
+        })
+    }
+
+    // 搜索过滤高亮
+    const highlightText = (text: string) => {
+        if (!searchTerm) return text
+        const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+        return text.replace(regex, '**$1**')
+    }
+
+    return (
+        <>
+            {/* 搜索栏 */}
+            <div className="chat-search-bar">
+                <Search size={16} />
+                <input
+                    type="text"
+                    placeholder="Search messages..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <button title="Previous user message" onClick={() => jumpToUserMsg('up')}>
+                    <ChevronUp size={18} />
+                </button>
+                <button title="Next user message" onClick={() => jumpToUserMsg('down')}>
+                    <ChevronDown size={18} />
+                </button>
+            </div>
+
+            {/* 消息流 */}
+            <div className="chat-messages" ref={scrollRef}>
+                {messages.length === 0 && (
+                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', paddingTop: 80 }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>🤖</div>
+                        <div>Start a conversation to begin</div>
+                    </div>
+                )}
+
+                {messages.map((msg, i) => {
+                    // 搜索过滤
+                    if (searchTerm && !msg.content.toLowerCase().includes(searchTerm.toLowerCase())) {
+                        return null
+                    }
+
+                    return (
+                        <div key={msg.id || i} className={`chat-msg ${msg.role}`}>
+                            {/* 文本内容 */}
+                            {msg.content && (
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {searchTerm ? highlightText(msg.content) : msg.content}
+                                </ReactMarkdown>
+                            )}
+
+                            {/* Tool Call 卡片 */}
+                            {msg.toolCalls?.map((tc, j) => {
+                                const key = `${msg.id}-tool-${j}`
+                                const expanded = expandedTools.has(key)
+                                return (
+                                    <div className="tool-call-card" key={key}>
+                                        <div className="tool-call-header" onClick={() => toggleTool(key)}>
+                                            <span>{expanded ? '▼' : '▶'}</span>
+                                            <span className="tool-name">{tc.name}</span>
+                                            <span className={`tool-status ${tc.status}`}>{tc.status}</span>
+                                        </div>
+                                        {expanded && (
+                                            <div className="tool-call-body">
+                                                <div><strong>Args:</strong> {tc.args}</div>
+                                                {tc.result && <div style={{ marginTop: 6 }}><strong>Result:</strong> {tc.result}</div>}
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            })}
+
+                            {/* 审批卡片 */}
+                            {msg.approval && !msg.approval.resolved && (
+                                <div className="approval-card">
+                                    <p>🔒 {msg.approval.question}</p>
+                                    {msg.approval.context && (
+                                        <pre style={{ fontSize: 12, marginBottom: 8 }}>{msg.approval.context}</pre>
+                                    )}
+                                    <div className="approval-actions">
+                                        <button className="btn-approve" onClick={() => onApproval(msg.approval!.id, true)}>
+                                            ✅ Approve
+                                        </button>
+                                        <button className="btn-reject" onClick={() => onApproval(msg.approval!.id, false)}>
+                                            ❌ Reject
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            {msg.approval?.resolved && (
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                    ✓ Approval resolved
+                                </div>
+                            )}
+                        </div>
+                    )
+                })}
+            </div>
+        </>
+    )
+}
