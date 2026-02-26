@@ -35,7 +35,8 @@ export const configSchema = z.object({
         maxRetries: z.number().default(3),
         logLevel: z.string().default('info'),
         executionMode: z.nativeEnum(ExecutionMode).default(ExecutionMode.SMART),
-    }).default({ maxRetries: 3, logLevel: 'info', executionMode: ExecutionMode.SMART }),
+        enableRituals: z.boolean().default(false), // 默认不启用 Ritual 文件体系
+    }).default({ maxRetries: 3, logLevel: 'info', executionMode: ExecutionMode.SMART, enableRituals: false }),
 });
 
 export type Config = z.infer<typeof configSchema>;

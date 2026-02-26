@@ -106,7 +106,9 @@ export class TaskEngine {
 
         // Phase 16: Ritual Files
         this.ritualLoader = new RitualLoader(workspace.rootPath);
-        this.ritualLoader.load();
+        if (config.system.enableRituals) {
+            this.ritualLoader.load();
+        }
 
         // Phase 3 init
         this.daemon = options.daemon;
