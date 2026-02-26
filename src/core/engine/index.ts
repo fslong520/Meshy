@@ -25,6 +25,9 @@ import { SecurityGuard } from '../security/guard.js';
 import { ExecutionMode as SecurityExecutionMode } from '../security/modes.js';
 import { SessionManager } from '../session/manager.js';
 import { WorkflowEngine, loadWorkflows } from '../workflow/engine.js';
+import { Logger, initLogger } from '../logger/index.js';
+import { createTodoWriteTool, createTodoReadTool } from '../tool/todo.js';
+import { CompactionAgent } from '../session/compaction.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -61,6 +64,12 @@ export class TaskEngine {
 
     // Tool System
     private toolRegistry: ToolRegistry;
+
+    // Phase 14: Structured Logger
+    public readonly logger: Logger;
+
+    // Phase 14: Compaction Agent
+    private compactionAgent: CompactionAgent;
 
     constructor(providerResolver: ProviderResolver, workspace: Workspace, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
@@ -99,6 +108,16 @@ export class TaskEngine {
             workspace.snapshotManager,
             workspace.reflectionEngine,
         );
+
+        // Phase 14: Logger
+        this.logger = initLogger({
+            minLevel: 'DEBUG',
+            workspaceRoot: workspace.rootPath,
+            sessionId: session.id,
+        });
+
+        // Phase 14: Compaction Agent
+        this.compactionAgent = new CompactionAgent(this.providerResolver.getProvider());
     }
 
     private defaultAskUser(question: string): Promise<string> {
@@ -459,6 +478,7 @@ export class TaskEngine {
      */
     public async resumeTask(): Promise<void> {
         console.log(`[Engine] Resuming interrupted session: ${this.session.id}`);
+        this.logger.engine(`Resuming interrupted session: ${this.session.id}`);
 
         // Phase 4 & 5 依赖初始化
         await this.workspace.memoryStore.initialize();
@@ -495,6 +515,11 @@ export class TaskEngine {
 
         while (!isDone && retries < this.maxRetries) {
             try {
+                // Phase 14: Auto-compact long sessions
+                if (this.compactionAgent.shouldCompact(this.session)) {
+                    this.logger.engine('Session exceeds compaction threshold, auto-compacting...');
+                    await this.compactionAgent.compact(this.session);
+                }
                 const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
                 const mcpTools = this.workspace.mcpHost.getAllTools();
                 const allTools = [...registryTools, ...mcpTools, ...injection.tools];
@@ -529,6 +554,7 @@ export class TaskEngine {
                         const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
                         pendingToolCalls.push(newCall);
                         process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
+                        this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
                         this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
                     } else if (event.type === 'tool_call_chunk') {
                         if (pendingToolCalls.length > 0) {
@@ -594,6 +620,7 @@ export class TaskEngine {
             } catch (err: unknown) {
                 retries++;
                 const message = err instanceof Error ? err.message : String(err);
+                this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
                 console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
                 this.session.addMessage({
                     role: 'user',
@@ -715,6 +742,10 @@ export class TaskEngine {
                 return { output: JSON.stringify(result) };
             },
         }));
+
+        // ── Phase 14: TodoWrite / TodoRead 任务追踪工具 ──
+        this.toolRegistry.register(createTodoWriteTool(() => this.session));
+        this.toolRegistry.register(createTodoReadTool(() => this.session));
     }
 
     private async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
