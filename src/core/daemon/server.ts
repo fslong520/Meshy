@@ -213,6 +213,22 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'capsules:list': {
+                this.emit('capsules:list', ws, msg.id);
+                break;
+            }
+
+            case 'blackboard:get': {
+                this.emit('blackboard:get', ws, msg.id);
+                break;
+            }
+
+            case 'session:replay': {
+                const sessionId = msg.params?.sessionId as string;
+                this.emit('session:replay', sessionId, ws, msg.id);
+                break;
+            }
+
             default:
                 this.sendTo(ws, {
                     id: msg.id,

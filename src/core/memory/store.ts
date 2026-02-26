@@ -26,17 +26,19 @@ export class MemoryStore {
     private dbPath: string;
     private embeddingProvider?: ILLMProvider;
 
-    constructor(workspaceRoot: string = process.cwd(), embeddingProvider?: ILLMProvider) {
-        const agentDir = path.join(workspaceRoot, '.agent');
-        if (!fs.existsSync(agentDir)) {
-            fs.mkdirSync(agentDir, { recursive: true });
+    constructor(workspaceRoot: string = process.cwd(), embeddingProvider?: ILLMProvider | null) {
+        const meshyDir = path.join(workspaceRoot, '.meshy');
+        if (!fs.existsSync(meshyDir)) {
+            fs.mkdirSync(meshyDir, { recursive: true });
         }
 
-        this.dbPath = path.join(agentDir, 'memory.db');
+        this.dbPath = path.join(meshyDir, 'memory.db');
         this.client = createClient({
             url: `file:${this.dbPath}`,
         });
-        this.embeddingProvider = embeddingProvider;
+        if (embeddingProvider) {
+            this.embeddingProvider = embeddingProvider;
+        }
     }
 
     /**
@@ -76,10 +78,12 @@ export class MemoryStore {
     public async addCapsule(capsule: Capsule): Promise<number> {
         let embedding = capsule.embedding;
 
-        // 如果没有传入向量，但配置了 Embedding Provider，自动生成
-        if (!embedding && this.embeddingProvider) {
+        // 如果没有传入向量，但配置了 Embedding Provider 且支持生成，自动生成
+        if (!embedding && this.embeddingProvider && this.embeddingProvider.supportsEmbedding()) {
             try {
-                embedding = await this.embeddingProvider.generateEmbedding(capsule.summary);
+                if (this.embeddingProvider.generateEmbedding) {
+                    embedding = await this.embeddingProvider.generateEmbedding(capsule.summary);
+                }
             } catch (err) {
                 console.warn('[MemoryStore] Failed to generate embedding for capsule, falling back to text only', err);
             }
@@ -110,7 +114,7 @@ export class MemoryStore {
      * 语义搜索：通过传入文本，计算其 Embedding，并在数据库中利用 vector_distance_cos 查找最相似的 Capsule。
      */
     public async searchCapsules(query: string, limit: number = 5): Promise<Capsule[]> {
-        if (!this.embeddingProvider) {
+        if (!this.embeddingProvider || !this.embeddingProvider.supportsEmbedding() || !this.embeddingProvider.generateEmbedding) {
             console.warn('[MemoryStore] Semantic search requested but no EmbeddingProvider available. Falling back to keyword search.');
             return this.searchCapsulesByKeyword(query, limit);
         }

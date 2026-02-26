@@ -100,9 +100,7 @@ export class AnthropicAdapter implements ILLMProvider {
         }
     }
 
-    async generateEmbedding(_text: string): Promise<number[]> {
-        // 返回全 0 向量，触发后续的 Keyword Search 降级而非直接阻断应用启动
-        console.log('[AnthropicAdapter] Anthropic API does not provide text embeddings. Returning dummy vector to trigger keyword fallback.');
-        return new Array(1536).fill(0);
+    supportsEmbedding(): boolean {
+        return false;
     }
 }

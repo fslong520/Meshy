@@ -59,6 +59,19 @@ export class ReflectionEngine {
                 return null;
             }
 
+            const toolCalls = session.history.filter(m => typeof m.content !== 'string' && m.content.type === 'tool_call');
+            const errors = session.history.filter(m => typeof m.content === 'string' && m.content.includes('Error'));
+
+            // 简单问答（无工具调用）跳过
+            if (toolCalls.length === 0) {
+                return null;
+            }
+
+            // 简单的一次性任务（只有一次工具调用且没报错）并且不是显式触发的 feedback，跳过
+            if (toolCalls.length === 1 && errors.length === 0 && !feedback) {
+                return null;
+            }
+
             // 根据反馈决定分类
             const category = this.resolveCategory(feedback);
 

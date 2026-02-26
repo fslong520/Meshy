@@ -113,9 +113,13 @@ export class OpenAIAdapter implements ILLMProvider {
         }
     }
 
+    supportsEmbedding(): boolean {
+        return true;
+    }
+
     async generateEmbedding(text: string): Promise<number[]> {
         const response = await this.client.embeddings.create({
-            model: 'text-embedding-3-small', // Default fallback embedding model
+            model: this.modelName,
             input: text,
             dimensions: 1536
         });

@@ -58,15 +58,28 @@ export class ProviderResolver {
     /**
      * 获取支持 Embeddings 的 Provider
      */
-    public getEmbeddingProvider(): ILLMProvider {
-        // 优先检查是否有 openai 类型的 provider
+    public getEmbeddingProvider(): ILLMProvider | null {
+        // 第一优先级：用户显式配置的 embedding 模型
+        if (this.config.models.embedding) {
+            try {
+                const provider = this.resolveFromTarget(this.config.models.embedding);
+                if (provider.supportsEmbedding()) {
+                    return provider;
+                }
+            } catch (err) {
+                console.warn(`[ProviderResolver] Failed to resolve embedding model ${this.config.models.embedding}`, err);
+            }
+        }
+
+        // 第二优先级：尝试寻找 openai 协议的 provider 降级使用 text-embedding-3-small
         for (const [name, cfg] of Object.entries(this.config.providers)) {
             if (cfg.protocol === 'openai') {
                 return this.resolveInstance(name, cfg, 'text-embedding-3-small');
             }
         }
-        // 如果没有 openai 协议 provider，使用默认
-        return this.resolveFromTarget(this.activeDefault);
+
+        // 若没有可用配置，返回 null，调用方需降级为 keyword search
+        return null;
     }
 
     /**

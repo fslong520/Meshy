@@ -7,6 +7,7 @@ import { ILLMProvider } from './core/llm/provider.js';
 import { DaemonServer } from './core/daemon/server.js';
 import { WorkspaceManager } from './core/workspace/manager.js';
 import { SessionManager } from './core/session/manager.js';
+import { exportReplay, loadReplay } from './core/session/replay.js';
 
 export async function runMeshy(prompt: string) {
     // 1. Load configuration
@@ -87,6 +88,34 @@ export async function runMeshy(prompt: string) {
                 daemon?.sendResponse(ws, msgId, { success: true, sessionId });
             } else {
                 daemon?.sendResponse(ws, msgId, { success: false, error: 'Session not found' });
+            }
+        });
+
+        // Dashboard RPCs
+        daemon.on('blackboard:get', (ws, msgId) => {
+            daemon?.sendResponse(ws, msgId, session.blackboard);
+        });
+
+        daemon.on('capsules:list', async (ws, msgId) => {
+            try {
+                const capsules = await activeWorkspace.memoryStore.getRecentCapsules(20);
+                daemon?.sendResponse(ws, msgId, capsules);
+            } catch (err) {
+                daemon?.sendResponse(ws, msgId, { error: 'Failed to fetch capsules' });
+            }
+        });
+
+        daemon.on('session:replay', (sessionId: string, ws, msgId) => {
+            if (session.id === sessionId) {
+                daemon?.sendResponse(ws, msgId, exportReplay(session));
+            } else {
+                const replayPath = `${activeWorkspace.rootPath}/.meshy/replays/${sessionId}.replay.json`;
+                const replay = loadReplay(replayPath);
+                if (replay) {
+                    daemon?.sendResponse(ws, msgId, replay);
+                } else {
+                    daemon?.sendResponse(ws, msgId, { error: 'Replay not found' });
+                }
             }
         });
     }

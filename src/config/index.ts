@@ -23,6 +23,7 @@ export const configSchema = z.object({
         default: z.string().default('openai/gpt-4o'),
         fallback: z.string().default('openai/gpt-4o'),
         small: z.string().default('openai/gpt-4o-mini'),
+        embedding: z.string().optional(), // 格式: "providerName/modelId"
     }).default({ default: 'openai/gpt-4o', fallback: 'openai/gpt-4o', small: 'openai/gpt-4o-mini' }),
     tasks: z.record(
         z.string(),

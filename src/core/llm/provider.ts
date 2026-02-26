@@ -44,7 +44,13 @@ export interface ILLMProvider {
     ): Promise<void>;
 
     /**
-     * Generates a vector embedding for the given text.
+     * 是否支持向量化生成
      */
-    generateEmbedding(text: string): Promise<number[]>;
+    supportsEmbedding(): boolean;
+
+    /**
+     * Generates a vector embedding for the given text.
+     * 仅当 supportsEmbedding() 为 true 时可调用。
+     */
+    generateEmbedding?(text: string): Promise<number[]>;
 }
