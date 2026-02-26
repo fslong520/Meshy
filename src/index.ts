@@ -44,7 +44,7 @@ export async function runMeshy(prompt: string) {
         const history = sessionManager.listSessions();
         if (history.length > 0 && !prompt) { // Only if no direct prompt provided
             console.log('[Meshy] Recent sessions:');
-            history.slice(0, 5).forEach((s, i) => console.log(`  ${i + 1}. ${s.id} (${s.lastModified.toLocaleString()})`));
+            history.slice(0, 5).forEach((s, i) => console.log(`  ${i + 1}. ${s.id} (${s.updatedAt})`));
         }
         session = sessionManager.createSession();
     }

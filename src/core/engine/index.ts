@@ -23,6 +23,7 @@ import { Workspace } from '../workspace/workspace.js';
 import { WorkerAgent } from './worker.js';
 import { SecurityGuard } from '../security/guard.js';
 import { ExecutionMode as SecurityExecutionMode } from '../security/modes.js';
+import { SessionManager } from '../session/manager.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -49,6 +50,9 @@ export class TaskEngine {
     // Phase 3 组件
     private sandbox: ExecutionSandbox;
     private daemon?: DaemonServer;
+
+    // Phase 12: Session Manager
+    private sessionManager: SessionManager;
 
     // Phase 7 Circuit Breaker
     private editAutoFixRetries: Map<string, number> = new Map();
@@ -87,6 +91,13 @@ export class TaskEngine {
         // Tool System init: 注册内置工具 + ACI 工具
         this.toolRegistry = createDefaultRegistry();
         this.registerAciTools();
+
+        // Phase 12: Session Manager
+        this.sessionManager = new SessionManager(
+            workspace.rootPath,
+            workspace.snapshotManager,
+            workspace.reflectionEngine,
+        );
     }
 
     private defaultAskUser(question: string): Promise<string> {
@@ -122,6 +133,7 @@ export class TaskEngine {
                     '  /ask <question>   — Ask without modifying code',
                     '  /plan <task>      — Plan mode, output structured steps',
                     '  /model [target]   — List providers or switch model (e.g. /model zeabur/gpt-5.2)',
+                    '  /session <cmd>    — Session management (list / save / load <id> / archive)',
                     '  /clear            — Clear current session',
                     '  /undo             — Roll back last edit',
                     '  /test             — Run tests',
@@ -150,6 +162,53 @@ export class TaskEngine {
                         const msg = err instanceof Error ? err.message : String(err);
                         console.error(`[Model] Failed to switch: ${msg}`);
                     }
+                }
+                break;
+            }
+
+            case 'session': {
+                const subCmd = (command.args || '').trim().split(/\s+/);
+                const action = subCmd[0] || 'list';
+
+                switch (action) {
+                    case 'list': {
+                        const sessions = this.sessionManager.listSessions();
+                        if (sessions.length === 0) {
+                            console.log('[Session] No sessions found.');
+                        } else {
+                            console.log('\n  Sessions:');
+                            for (const s of sessions) {
+                                const goalLabel = s.goal ? ` — ${s.goal}` : '';
+                                console.log(`    • [${s.status.toUpperCase()}] ${s.id} (${s.messageCount} msgs, ${s.updatedAt})${goalLabel}`);
+                            }
+                        }
+                        break;
+                    }
+                    case 'save':
+                        this.sessionManager.suspendSession(this.session);
+                        console.log(`[Session] Current session "${this.session.id}" has been suspended.`);
+                        break;
+                    case 'load': {
+                        const targetId = subCmd[1];
+                        if (!targetId) {
+                            console.log('[Session] Usage: /session load <session-id>');
+                            break;
+                        }
+                        const restored = this.sessionManager.resumeSession(targetId);
+                        if (restored) {
+                            this.session = restored;
+                            console.log(`[Session] Switched to session "${restored.id}".`);
+                        } else {
+                            console.log(`[Session] Session "${targetId}" not found.`);
+                        }
+                        break;
+                    }
+                    case 'archive':
+                        await this.sessionManager.archiveSession(this.session);
+                        console.log(`[Session] Session "${this.session.id}" archived and reflection triggered.`);
+                        break;
+                    default:
+                        console.log('[Session] Unknown sub-command. Use: list, save, load <id>, archive');
                 }
                 break;
             }

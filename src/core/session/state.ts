@@ -1,5 +1,7 @@
 import { StandardMessage } from '../llm/provider.js';
 
+export type SessionStatus = 'active' | 'suspended' | 'archived';
+
 export interface BlockboardState {
     currentGoal: string;
     tasks: Array<{
@@ -15,6 +17,9 @@ export class Session {
     public id: string;
     public history: StandardMessage[];
     public blackboard: BlockboardState;
+    public createdAt: string;
+    public updatedAt: string;
+    public status: SessionStatus;
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -37,10 +42,15 @@ export class Session {
         };
         this.pinnedTools = new Set();
         this.ragSelectedTools = new Set();
+        const now = new Date().toISOString();
+        this.createdAt = now;
+        this.updatedAt = now;
+        this.status = 'active';
     }
 
     public addMessage(message: StandardMessage) {
         this.history.push(message);
+        this.updatedAt = new Date().toISOString();
     }
 
     public updateBlackboard(updates: Partial<BlockboardState>) {
@@ -107,12 +117,13 @@ export class Session {
     }
 
     public serialize(): string {
-        // In L1 Infrastructure, this would serialize into a highly compressed 
-        // binary format like MessagePack or Protobuf. For MVP, we use JSON.
         return JSON.stringify({
             id: this.id,
             history: this.history,
             blackboard: this.blackboard,
+            createdAt: this.createdAt,
+            updatedAt: this.updatedAt,
+            status: this.status,
         });
     }
 
@@ -121,6 +132,9 @@ export class Session {
         const session = new Session(parsed.id);
         session.history = parsed.history || [];
         session.blackboard = parsed.blackboard;
+        if (parsed.createdAt) session.createdAt = parsed.createdAt;
+        if (parsed.updatedAt) session.updatedAt = parsed.updatedAt;
+        if (parsed.status) session.status = parsed.status;
         return session;
     }
 }

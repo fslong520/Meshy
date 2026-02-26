@@ -20,6 +20,7 @@ export type SlashCommandType =
     | 'test'       // 直接跑测试
     | 'compact'    // 压缩对话历史
     | 'model'      // 查看/切换模型
+    | 'session'    // 会话管理 (list/save/load/archive)
     | 'help';      // 显示帮助
 
 export interface SlashCommand {
