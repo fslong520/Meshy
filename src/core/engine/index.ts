@@ -483,8 +483,14 @@ export class TaskEngine {
         const decision = await this.router.classify(parsed.cleanText);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
-        // ── Phase 4: 被动召回历史经验 ──
-        const memoryHint = await this.workspace.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
+        // ── Phase 4: 被动召回历史经验 (Advanced Feature, only on complex intents or explicit @memory) ──
+        let memoryHint = '';
+        const isComplexTask = decision.intent === 'task_planning' || decision.intent === 'debug';
+        const isExplicitMemoryMention = parsed.mentions.some(m => m.raw.toLowerCase().includes('memory'));
+
+        if (isComplexTask || isExplicitMemoryMention) {
+            memoryHint = await this.workspace.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
+        }
 
         // ── Phase 2: 使用 SystemPromptBuilder 组装 Prompt ──
         const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
@@ -878,6 +884,21 @@ export class TaskEngine {
         // ── Phase 14: TodoWrite / TodoRead 任务追踪工具 ──
         this.toolRegistry.register(createTodoWriteTool(() => this.session));
         this.toolRegistry.register(createTodoReadTool(() => this.session));
+
+        // ── Phase 19/20: Search Project Memory ──
+        const memoryStoreRef = this.workspace.memoryStore;
+        this.toolRegistry.register(defineTool('searchProjectMemory', {
+            description: 'Search the project\'s long term memory database (EvoMap) for past solutions, architecture decisions, and error recoveries using natural language or keywords.',
+            parameters: z.object({
+                query: z.string().describe('The search query or keyword representing the task or issue.'),
+                limit: z.number().optional().describe('How many records to return (default 5)')
+            }),
+            async execute(args) {
+                const results = await memoryStoreRef.searchCapsules(args.query, args.limit || 5);
+                if (results.length === 0) return { output: 'No relevant memories found.' };
+                return { output: '--- Memory Search Results ---\n' + results.map((r, i) => `${i + 1}. [${r.category}] ${r.summary}`).join('\n') };
+            }
+        }));
     }
 
     private async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
