@@ -1,10 +1,12 @@
-import { ILLMProvider, StandardPrompt } from '../llm/provider.js';
+import { ILLMProvider, StandardPrompt, StandardTool } from '../llm/provider.js';
 import { ProviderResolver } from '../llm/resolver.js';
 import { SubagentConfig } from '../subagents/loader.js';
 import { Session } from '../session/state.js';
 import { ToolRegistry } from '../tool/registry.js';
 import { Workspace } from '../workspace/workspace.js';
 import { SystemPromptBuilder } from '../router/prompt-builder.js';
+import { SecurityGuard } from '../security/guard.js';
+import { ExecutionMode } from '../security/modes.js';
 
 export interface WorkerOptions {
     parentSession?: Session;
@@ -25,14 +27,17 @@ export interface WorkerOptions {
 export class WorkerAgent {
     public readonly session: Session;
     private maxRetries = 10;
+    private securityGuard: SecurityGuard;
 
     constructor(
         private config: SubagentConfig,
         private workspace: Workspace,
         private toolRegistry: ToolRegistry,
-        private providerResolver: ProviderResolver
+        private providerResolver: ProviderResolver,
+        securityGuard?: SecurityGuard,
     ) {
         this.session = new Session(`worker-${config.name}-${Date.now()}`);
+        this.securityGuard = securityGuard ?? new SecurityGuard(ExecutionMode.SMART);
     }
 
     /**
@@ -167,6 +172,18 @@ export class WorkerAgent {
     }
 
     private async executeToolSilently(name: string, args: Record<string, unknown>): Promise<string> {
+        // Phase 11: SecurityGuard check
+        const decision = this.securityGuard.evaluate(name, args as Record<string, any>);
+        if (!decision.allowed && !decision.requiresApproval) {
+            console.warn(`[Worker SecurityGuard] Blocked: ${decision.reason}`);
+            return `Action blocked by SecurityGuard: ${decision.reason}`;
+        }
+        if (!decision.allowed && decision.requiresApproval) {
+            // In Worker context, we auto-reject actions needing approval (Workers should not pause)
+            console.warn(`[Worker SecurityGuard] Rejected (requires approval, not available in Worker): ${decision.reason}`);
+            return `Action rejected: Worker agents cannot request user approval. ${decision.reason}`;
+        }
+
         try {
             if (name.startsWith('mcp:')) {
                 return await this.workspace.mcpHost.callTool(name, args);
@@ -174,7 +191,7 @@ export class WorkerAgent {
             const result = await this.toolRegistry.execute(name, args, {
                 sessionId: this.session.id,
                 workspaceRoot: process.cwd(),
-                session: this.session, // Worker 的私有 session
+                session: this.session,
             });
             return result.output;
         } catch (e: unknown) {

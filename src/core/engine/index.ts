@@ -21,6 +21,8 @@ import { loadConfig } from '../../config/index.js';
 import { executeDelegate } from '../tool/delegate-tool.js';
 import { Workspace } from '../workspace/workspace.js';
 import { WorkerAgent } from './worker.js';
+import { SecurityGuard } from '../security/guard.js';
+import { ExecutionMode as SecurityExecutionMode } from '../security/modes.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -264,7 +266,10 @@ export class TaskEngine {
             const agentConfig = this.subagentRegistry.getAgent(agentMention.value);
             if (agentConfig) {
                 // 由 TaskEngine (TeamLead) 衍生出独立的 Worker 开始工作，避开主链路
-                const worker = new WorkerAgent(agentConfig, this.workspace, this.toolRegistry, this.providerResolver);
+                const workerGuard = new SecurityGuard(
+                    (this.sandbox.getMode() as unknown as SecurityExecutionMode) ?? SecurityExecutionMode.SMART
+                );
+                const worker = new WorkerAgent(agentConfig, this.workspace, this.toolRegistry, this.providerResolver, workerGuard);
 
                 // 将必要的工具依赖注入到 Subagent
                 const injectedTools: import('../llm/provider.js').StandardTool[] = [];

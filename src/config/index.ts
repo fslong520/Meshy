@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { z } from 'zod';
+import { ExecutionMode } from '../core/security/modes.js';
 
 // ─── Provider 连接配置 ───
 const providerConfigSchema = z.object({
@@ -33,7 +34,8 @@ export const configSchema = z.object({
     system: z.object({
         maxRetries: z.number().default(3),
         logLevel: z.string().default('info'),
-    }).default({ maxRetries: 3, logLevel: 'info' }),
+        executionMode: z.nativeEnum(ExecutionMode).default(ExecutionMode.SMART),
+    }).default({ maxRetries: 3, logLevel: 'info', executionMode: ExecutionMode.SMART }),
 });
 
 export type Config = z.infer<typeof configSchema>;
