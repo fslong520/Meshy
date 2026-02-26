@@ -12,8 +12,11 @@ export class AnthropicAdapter implements ILLMProvider {
     private client: Anthropic;
     private model: string;
 
-    constructor(apiKey: string, model: string = 'claude-3-5-sonnet-20240620') {
-        this.client = new Anthropic({ apiKey });
+    constructor(apiKey: string, model: string = 'claude-3-5-sonnet-20240620', baseURL?: string) {
+        // Anthropic SDK 会自内部追加 /v1/messages，
+        // 如果配置的 baseURL 已经包含 /v1 后缀则需要去掉，避免 /v1/v1/messages 404。
+        const normalizedBaseURL = baseURL?.replace(/\/v1\/?$/, '') || undefined;
+        this.client = new Anthropic({ apiKey, baseURL: normalizedBaseURL });
         this.model = model;
     }
 
@@ -98,6 +101,8 @@ export class AnthropicAdapter implements ILLMProvider {
     }
 
     async generateEmbedding(_text: string): Promise<number[]> {
-        throw new Error('Anthropic API does not provide an endpoint for text embeddings. Please map the embedding request to an OpenAI model provider.');
+        // 返回全 0 向量，触发后续的 Keyword Search 降级而非直接阻断应用启动
+        console.log('[AnthropicAdapter] Anthropic API does not provide text embeddings. Returning dummy vector to trigger keyword fallback.');
+        return new Array(1536).fill(0);
     }
 }

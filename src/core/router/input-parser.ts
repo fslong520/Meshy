@@ -19,6 +19,7 @@ export type SlashCommandType =
     | 'undo'       // 回滚上一次编辑
     | 'test'       // 直接跑测试
     | 'compact'    // 压缩对话历史
+    | 'model'      // 查看/切换模型
     | 'help';      // 显示帮助
 
 export interface SlashCommand {
@@ -73,7 +74,7 @@ export interface ParsedInput {
 // ─── 常量 ───
 
 const VALID_SLASH_COMMANDS = new Set<SlashCommandType>([
-    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'help',
+    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'model', 'help',
 ]);
 
 /**

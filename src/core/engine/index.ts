@@ -10,7 +10,7 @@ import { SubagentRegistry } from '../subagents/loader.js';
 import { LazyInjector } from '../injector/lazy.js';
 import { ExecutionSandbox, ExecutionMode, AskUserCallback } from '../sandbox/execution.js';
 import { AISecondaryReviewer } from '../sandbox/reviewer.js';
-import { DiagnosticGuard } from '../guard/diagnostic.js';
+import { LSPManager } from '../lsp/index.js';
 import { DaemonServer } from '../daemon/server.js';
 import { MemoryStore } from '../memory/store.js';
 import { ReflectionEngine, FeedbackType } from '../memory/reflection.js';
@@ -45,8 +45,12 @@ export class TaskEngine {
 
     // Phase 3 组件
     private sandbox: ExecutionSandbox;
-    private diagnosticGuard: DiagnosticGuard;
+    private lspManager: LSPManager;
     private daemon?: DaemonServer;
+
+    // Phase 7 Circuit Breaker
+    private editAutoFixRetries: Map<string, number> = new Map();
+    private MAX_AUTOFIX_RETRIES = 3;
 
     // Phase 4 组件
     private memoryStore: MemoryStore;
@@ -86,7 +90,7 @@ export class TaskEngine {
             ?? (this.daemon ? this.daemon.requestApproval.bind(this.daemon) : this.defaultAskUser);
         const reviewer = new AISecondaryReviewer(this.providerResolver);
         this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser, reviewer);
-        this.diagnosticGuard = new DiagnosticGuard();
+        this.lspManager = new LSPManager();
 
         // Phase 4 init
         const embeddingProvider = this.providerResolver.getEmbeddingProvider();
@@ -135,6 +139,7 @@ export class TaskEngine {
                     'Available commands:',
                     '  /ask <question>   — Ask without modifying code',
                     '  /plan <task>      — Plan mode, output structured steps',
+                    '  /model [target]   — List providers or switch model (e.g. /model zeabur/gpt-5.2)',
                     '  /clear            — Clear current session',
                     '  /undo             — Roll back last edit',
                     '  /test             — Run tests',
@@ -142,6 +147,30 @@ export class TaskEngine {
                     '  /help             — Show this help',
                 ].join('\n'));
                 break;
+
+            case 'model': {
+                if (!command.args) {
+                    // 列出所有可用 provider 和当前模型
+                    const providers = this.providerResolver.listProviders();
+                    const currentModel = this.providerResolver.getActiveDefault();
+                    console.log('\n  Current model: ' + currentModel);
+                    console.log('  Available providers:');
+                    for (const p of providers) {
+                        const url = p.baseUrl ? ` (${p.baseUrl})` : ' (official)';
+                        console.log(`    • ${p.name} [${p.protocol}]${url}`);
+                    }
+                    console.log('\n  Usage: /model <providerName/modelId>');
+                } else {
+                    try {
+                        this.providerResolver.switchModel(command.args.trim());
+                        console.log(`[Model] Switched to: ${command.args.trim()}`);
+                    } catch (err: unknown) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error(`[Model] Failed to switch: ${msg}`);
+                    }
+                }
+                break;
+            }
 
             case 'ask':
             case 'plan':
@@ -404,8 +433,9 @@ export class TaskEngine {
 
     // ─── ACI 工具注册到 ToolRegistry ───
     private registerAciTools(): void {
+        const self = this;
         const aci = this.aci;
-        const guard = this.diagnosticGuard;
+        const lsp = this.lspManager;
         const daemon = this.daemon;
 
         this.toolRegistry.register(defineTool('readFile', {
@@ -434,19 +464,29 @@ export class TaskEngine {
                 // LSP 诊断拦截
                 const currentContent = aci.readFile(args.filePath);
                 const simulatedContent = currentContent.content.replace(args.searchBlock, args.replaceBlock);
-                const diagnosticResult = guard.checkContent(args.filePath, simulatedContent);
+                const diagnostics = await lsp.getDiagnostics(args.filePath, simulatedContent);
 
-                if (!diagnosticResult.passed) {
-                    const errorMessages = diagnosticResult.diagnostics
-                        .filter(d => d.severity === 'error')
-                        .map(d => `  Line ${d.line}: ${d.message} (${d.code})`)
-                        .join('\n');
+                if (diagnostics.length > 0) {
+                    const errorMessages = diagnostics.map(d => `  ${d}`).join('\n');
+                    let retryCount = self.editAutoFixRetries.get(args.filePath) || 0;
+                    retryCount++;
+                    self.editAutoFixRetries.set(args.filePath, retryCount);
 
-                    daemon?.broadcast('agent:error', { tool: 'editFile', diagnostics: diagnosticResult.diagnostics });
+                    daemon?.broadcast('agent:error', { tool: 'editFile', diagnostics });
+
+                    if (retryCount >= self.MAX_AUTOFIX_RETRIES) {
+                        return {
+                            output: `Edit REJECTED by LSP Guard. ${diagnostics.length} error(s):\n${errorMessages}\n[CIRCUIT BREAKER] MAX_AUTOFIX_RETRIES (${self.MAX_AUTOFIX_RETRIES}) reached for this file. You MUST stop fixing this file and report to the user for manual intervention.`
+                        };
+                    }
+
                     return {
-                        output: `Edit REJECTED by diagnostic guard. ${diagnosticResult.errorCount} error(s):\n${errorMessages}\nPlease fix and retry.`,
+                        output: `Edit REJECTED by LSP Guard. ${diagnostics.length} error(s):\n${errorMessages}\nPlease fix and retry. (Attempt ${retryCount}/${self.MAX_AUTOFIX_RETRIES})`,
                     };
                 }
+
+                // If successful, reset circuit breaker
+                self.editAutoFixRetries.delete(args.filePath);
 
                 aci.editFile(args.filePath, args.expectedHash, args.searchBlock, args.replaceBlock);
                 daemon?.broadcast('agent:tool_result', { tool: 'editFile', success: true });

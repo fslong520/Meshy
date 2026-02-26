@@ -15,32 +15,34 @@ function convertZodType(schema: z.ZodType): Record<string, unknown> {
     const def = (schema as any)._def ?? (schema as any).def;
     if (!def) return { type: 'string' };
 
-    const typeName: string = def.typeName ?? def.type ?? '';
+    // 兼容取值方式，ZodObject 可能存在不同版本差异
+    const typeName: string = def.typeName ?? def.type ?? schema.constructor.name ?? '';
 
-    switch (typeName) {
-        case 'ZodObject': {
-            const shape = (schema as z.ZodObject<any>).shape;
-            const properties: Record<string, unknown> = {};
-            const required: string[] = [];
+    if (typeName === 'ZodObject' || schema instanceof z.ZodObject) {
+        const shape = (schema as z.ZodObject<any>).shape;
+        const properties: Record<string, unknown> = {};
+        const required: string[] = [];
 
-            for (const [key, value] of Object.entries(shape)) {
-                const fieldSchema = value as z.ZodType;
-                properties[key] = convertZodType(fieldSchema);
+        for (const [key, value] of Object.entries(shape)) {
+            const fieldSchema = value as z.ZodType;
+            properties[key] = convertZodType(fieldSchema);
 
-                const fieldDef = (fieldSchema as any)._def ?? (fieldSchema as any).def;
-                const fieldTypeName: string = fieldDef?.typeName ?? fieldDef?.type ?? '';
-                if (fieldTypeName !== 'ZodOptional') {
-                    required.push(key);
-                }
+            const fieldDef = (fieldSchema as any)._def ?? (fieldSchema as any).def;
+            const fieldTypeName: string = fieldDef?.typeName ?? fieldDef?.type ?? '';
+            if (fieldTypeName !== 'ZodOptional') {
+                required.push(key);
             }
-
-            return {
-                type: 'object',
-                properties,
-                ...(required.length > 0 ? { required } : {}),
-            };
         }
 
+        return {
+            type: 'object',
+            properties,
+            ...(required.length > 0 ? { required } : {}),
+            additionalProperties: false // OpenAI requires strict schema sometimes
+        };
+    }
+
+    switch (typeName) {
         case 'ZodString':
             return {
                 type: 'string',

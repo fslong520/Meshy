@@ -2,105 +2,154 @@
  * Provider Resolver — 模型解析工厂
  *
  * 统一管理系统内的所有 LLM Provider 实例。
- * 支持 Task-Based Model Routing 和 Subagent 动态模型覆盖。
+ * 支持多 Provider 同时使用、跨协议模型调用、运行时模型切换。
  */
 
 import { ILLMProvider } from './provider.js';
 import { OpenAIAdapter } from './openai.js';
 import { AnthropicAdapter } from './anthropic.js';
-import { Config } from '../../config/index.js';
+import { Config, ProviderConfig } from '../../config/index.js';
+
+export interface ProviderInfo {
+    name: string;
+    protocol: string;
+    baseUrl?: string;
+    hasApiKey: boolean;
+}
 
 export class ProviderResolver {
     private config: Config;
     private instances: Map<string, ILLMProvider> = new Map();
 
-    // 默认回落模型
-    private defaultProvider: string;
-    private defaultModel: string;
+    // 当前活跃的默认模型（可运行时切换）
+    private activeDefault: string;
 
     constructor(config: Config) {
         this.config = config;
-        this.defaultProvider = config.provider;
-        this.defaultModel = config.models.default;
+        this.activeDefault = config.models.default;
     }
 
     /**
-     * 根据任务名称或明确的模型标识符，获取甚至动态实例化一个 ILLMProvider。
+     * 解析 "providerName/modelId" 格式的 target 字符串为 provider 实例。
      *
-     * @param target 可以是 config.tasks 中的任务名 (如 "tool_query_rewrite")，
-     *               也可以是显式的直连标识符 (如 "openai/gpt-4o-mini").
-     *               如果为空，或者解析失败，则返回系统默认的 LLM。
+     * @param target 格式: "providerName/modelId" 或 config.tasks 中的任务名。
+     *               如果为空，返回当前活跃的默认 LLM。
      */
     public getProvider(target?: string): ILLMProvider {
         if (!target) {
-            return this.resolveInstance(this.defaultProvider, this.defaultModel);
+            return this.resolveFromTarget(this.activeDefault);
         }
 
-        // 1. 尝试按直连标识符解析 (格式: provider/model)
+        // 1. 尝试按 providerName/modelId 格式解析
         if (target.includes('/')) {
-            const [provider, ...rest] = target.split('/');
-            const model = rest.join('/');
-            if (provider && model) {
-                return this.resolveInstance(provider, model);
-            }
+            return this.resolveFromTarget(target);
         }
 
-        // 2. 尝试从 config.tasks 寻找映射
+        // 2. 尝试从 config.tasks 映射
         const taskConfig = this.config.tasks?.[target];
         if (taskConfig) {
-            return this.resolveInstance(taskConfig.provider, taskConfig.model);
+            return this.resolveFromTarget(`${taskConfig.provider}/${taskConfig.model}`);
         }
 
-        // 3. Fallback 到系统默认
-        return this.resolveInstance(this.defaultProvider, this.defaultModel);
+        // 3. Fallback
+        return this.resolveFromTarget(this.activeDefault);
     }
 
     /**
-     * 获取支持 Embeddings 的 Provider（通常回退到 OpenAI，因为部分厂商不支持）
+     * 获取支持 Embeddings 的 Provider
      */
     public getEmbeddingProvider(): ILLMProvider {
-        // 如果系统配置了专用的 Embedding 映射，可从 config 读
-        // 当前简单处理：如果默认 Provider 支持 Embedding（假设 OpenAI），就返回默认
-        // 否则硬编码回落到 OpenAI
-        if (this.defaultProvider === 'openai') {
-            return this.getProvider();
+        // 优先检查是否有 openai 类型的 provider
+        for (const [name, cfg] of Object.entries(this.config.providers)) {
+            if (cfg.protocol === 'openai') {
+                return this.resolveInstance(name, cfg, 'text-embedding-3-small');
+            }
         }
-
-        return this.resolveInstance('openai', 'text-embedding-3-small');
+        // 如果没有 openai 协议 provider，使用默认
+        return this.resolveFromTarget(this.activeDefault);
     }
 
     /**
-     * 单例解析和挂载核心逻辑。缓存 Key 为 "provider:model"
+     * 运行时切换默认模型
      */
-    private resolveInstance(providerName: string, modelName: string): ILLMProvider {
-        const cacheKey = `${providerName}:${modelName}`;
+    public switchModel(target: string): void {
+        // 验证 provider 存在
+        const [providerName] = target.split('/');
+        if (!this.config.providers[providerName]) {
+            throw new Error(`Provider "${providerName}" not found in config. Available: ${this.listProviderNames().join(', ')}`);
+        }
+        this.activeDefault = target;
+        console.log(`[ProviderResolver] Switched default model to: ${target}`);
+    }
 
+    /**
+     * 获取当前活跃的默认模型标识符
+     */
+    public getActiveDefault(): string {
+        return this.activeDefault;
+    }
+
+    /**
+     * 列出所有已配置的 Provider 信息
+     */
+    public listProviders(): ProviderInfo[] {
+        return Object.entries(this.config.providers).map(([name, cfg]) => ({
+            name,
+            protocol: cfg.protocol,
+            baseUrl: cfg.baseUrl,
+            hasApiKey: !!cfg.apiKey,
+        }));
+    }
+
+    /**
+     * 列出所有已配置的 Provider 名称
+     */
+    public listProviderNames(): string[] {
+        return Object.keys(this.config.providers);
+    }
+
+    // ─── Private ───
+
+    /**
+     * 从 "providerName/modelId" 格式解析
+     */
+    private resolveFromTarget(target: string): ILLMProvider {
+        const slashIndex = target.indexOf('/');
+        if (slashIndex === -1) {
+            throw new Error(`Invalid model target "${target}". Expected format: "providerName/modelId"`);
+        }
+
+        const providerName = target.substring(0, slashIndex);
+        const modelId = target.substring(slashIndex + 1);
+
+        const providerConfig = this.config.providers[providerName];
+        if (!providerConfig) {
+            throw new Error(
+                `Provider "${providerName}" not found in config.providers. ` +
+                `Available providers: [${this.listProviderNames().join(', ')}]`
+            );
+        }
+
+        return this.resolveInstance(providerName, providerConfig, modelId);
+    }
+
+    /**
+     * 单例解析核心。缓存 Key 为 "providerName:modelId"
+     */
+    private resolveInstance(providerName: string, cfg: ProviderConfig, modelId: string): ILLMProvider {
+        const cacheKey = `${providerName}:${modelId}`;
         if (this.instances.has(cacheKey)) {
             return this.instances.get(cacheKey)!;
         }
 
         let instance: ILLMProvider;
 
-        if (providerName === 'openai') {
-            const apiKey = this.config.apiKeys.openai || process.env.OPENAI_API_KEY;
-            if (!apiKey) {
-                console.warn(`[ProviderResolver] Missing OpenAI API Key for ${modelName}.`);
-                // Fallback to default if failing on secondary tasks usually causes problems,
-                // but here we just throw or return default if default works.
-                // For simplicity, we assume if they configured it, the key exists.
-                // We'll let the Adapter handle the empty key throw.
-            }
-            instance = new OpenAIAdapter(apiKey || '', modelName);
-        } else if (providerName === 'anthropic') {
-            const apiKey = this.config.apiKeys.anthropic || process.env.ANTHROPIC_API_KEY;
-            // 对于 AnthropicAdapter，它默认没有接收 modelName 的参数（由内部配置处理），
-            // 如果项目中 AnthropicAdapter 不支持动态 model，则需要相应扩展它。
-            // 假设我们现在对 AnthropicAdapter 构造函数做了增强，允许传入 modelName。
-            // (If not supported, we will refactor AnthropicAdapter shortly).
-            instance = new AnthropicAdapter(apiKey || '', modelName);
+        if (cfg.protocol === 'openai') {
+            instance = new OpenAIAdapter(cfg.apiKey, modelId, cfg.baseUrl);
+        } else if (cfg.protocol === 'anthropic') {
+            instance = new AnthropicAdapter(cfg.apiKey, modelId, cfg.baseUrl);
         } else {
-            console.warn(`[ProviderResolver] Unsupported provider "${providerName}". Falling back to default.`);
-            return this.resolveInstance(this.defaultProvider, this.defaultModel);
+            throw new Error(`Unsupported protocol "${cfg.protocol}" for provider "${providerName}".`);
         }
 
         this.instances.set(cacheKey, instance);

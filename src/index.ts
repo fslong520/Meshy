@@ -10,7 +10,8 @@ import { SnapshotManager } from './core/session/snapshot.js';
 export async function runMeshy(prompt: string) {
     // 1. Load configuration
     const config = loadConfig();
-    console.log(`[Meshy] Loaded Config. Provider: ${config.provider}`);
+    const providerNames = Object.keys(config.providers);
+    console.log(`[Meshy] Loaded Config. Providers: [${providerNames.join(', ')}] | Default: ${config.models.default}`);
 
     // 2. Initialize the Provider Resolver
     const { ProviderResolver } = await import('./core/llm/resolver.js');
@@ -38,25 +39,29 @@ export async function runMeshy(prompt: string) {
         session = new Session('session-' + Date.now());
     }
 
-    // 4. Start Daemon Server (Phase 5)
-    const daemon = new DaemonServer(9120);
-    daemon.start();
+    // 4. Start Daemon Server optionally (Phase 5)
+    const isDaemonMode = process.argv.includes('--daemon');
+    let daemon: DaemonServer | undefined;
+    if (isDaemonMode) {
+        daemon = new DaemonServer(9120);
+        daemon.start();
+
+        // 监听 Web UI 发来的独立任务
+        daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
+            console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
+            try {
+                await engine.runTask(submittedPrompt);
+                daemon?.broadcast('agent:done', { id });
+            } catch (err) {
+                console.error('[Meshy] Task from Web UI failed:', err);
+            }
+        });
+    }
 
     // 5. Start Task Engine
     const engine = new TaskEngine(providerResolver, session, {
         maxRetries: config.system.maxRetries,
         daemon: daemon,
-    });
-
-    // 监听 Web UI 发来的独立任务（如果在守护进程模式下使用）
-    daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
-        console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
-        try {
-            await engine.runTask(submittedPrompt);
-            daemon.broadcast('agent:done', { id });
-        } catch (err) {
-            console.error('[Meshy] Task from Web UI failed:', err);
-        }
     });
 
     if (isResuming) {
@@ -67,9 +72,13 @@ export async function runMeshy(prompt: string) {
         await engine.runTask(prompt);
     }
 
-    // 如果没有通过 CLI 传入任何任务，或者任务结束，可以考虑保持进程不退出，以服务 Web UI。
-    // 为了防止 CLI 立即退出，我们这里不需要手动 stop daemon。
-    console.log(`\n[Meshy] CLI Task completed or suspended. Daemon is still running for Web UI.`);
+    // 处理退出逻辑
+    if (isDaemonMode) {
+        console.log(`\n[Meshy] CLI Task completed or suspended. Daemon is still running for Web UI.`);
+    } else {
+        console.log(`\n[Meshy] Task completed. Exiting.`);
+        process.exit(0);
+    }
 }
 
 /**

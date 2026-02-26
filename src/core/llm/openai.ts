@@ -12,8 +12,8 @@ export class OpenAIAdapter implements ILLMProvider {
     private client: OpenAI;
     private modelName: string;
 
-    constructor(apiKey: string, modelName: string = 'gpt-4o') {
-        this.client = new OpenAI({ apiKey });
+    constructor(apiKey: string, modelName: string = 'gpt-4o', baseURL?: string) {
+        this.client = new OpenAI({ apiKey, baseURL });
         this.modelName = modelName;
     }
 

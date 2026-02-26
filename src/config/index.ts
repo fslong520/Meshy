@@ -3,18 +3,26 @@ import path from 'path';
 import os from 'os';
 import { z } from 'zod';
 
-// Define the configuration schema using Zod
+// ─── Provider 连接配置 ───
+const providerConfigSchema = z.object({
+    protocol: z.enum(['openai', 'anthropic']),
+    baseUrl: z.string().optional(),
+    apiKey: z.string(),
+});
+
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
+// ─── 主配置 Schema ───
 export const configSchema = z.object({
-    provider: z.string().default('openai'),
-    apiKeys: z.record(z.string(), z.string()).default({}),
+    providers: z.record(z.string(), providerConfigSchema).default({}),
     ui: z.object({
         theme: z.string().default('dark'),
     }).default({ theme: 'dark' }),
     models: z.object({
-        default: z.string().default('gpt-4o'),
-        fallback: z.string().default('claude-3-5-sonnet-20240620'),
-        small: z.string().default('gpt-4o-mini'),
-    }).default({ default: 'gpt-4o', fallback: 'claude-3-5-sonnet-20240620', small: 'gpt-4o-mini' }),
+        default: z.string().default('openai/gpt-4o'),
+        fallback: z.string().default('openai/gpt-4o'),
+        small: z.string().default('openai/gpt-4o-mini'),
+    }).default({ default: 'openai/gpt-4o', fallback: 'openai/gpt-4o', small: 'openai/gpt-4o-mini' }),
     tasks: z.record(
         z.string(),
         z.object({
@@ -33,7 +41,7 @@ export type Config = z.infer<typeof configSchema>;
 /**
  * Loads a JSON config file and parses it. Returns an empty object if file doesn't exist.
  */
-function loadJsonConfig(filePath: string): Partial<Config> {
+function loadJsonConfig(filePath: string): Record<string, any> {
     try {
         if (fs.existsSync(filePath)) {
             const fileContents = fs.readFileSync(filePath, 'utf8');
@@ -73,6 +81,58 @@ function deepMerge<T extends Record<string, any>>(...objs: Partial<T>[]): T {
 }
 
 /**
+ * 向后兼容迁移：将旧格式 (provider/apiKeys/baseUrls) 转换为新格式 (providers)
+ */
+function migrateOldConfig(raw: Record<string, any>): Record<string, any> {
+    // 如果已经有 providers 字段，无需迁移
+    if (raw.providers && Object.keys(raw.providers).length > 0) {
+        return raw;
+    }
+
+    const oldProvider = raw.provider as string | undefined;
+    const oldApiKeys = raw.apiKeys as Record<string, string> | undefined;
+    const oldBaseUrls = raw.baseUrls as Record<string, string> | undefined;
+
+    if (!oldApiKeys || Object.keys(oldApiKeys).length === 0) {
+        return raw;
+    }
+
+    const providers: Record<string, any> = {};
+
+    for (const [name, apiKey] of Object.entries(oldApiKeys)) {
+        providers[name] = {
+            protocol: name as string,
+            baseUrl: oldBaseUrls?.[name],
+            apiKey,
+        };
+    }
+
+    // 迁移 models 为 provider/model 格式
+    const oldModels = raw.models as Record<string, string> | undefined;
+    const models: Record<string, string> = {};
+
+    if (oldModels && oldProvider) {
+        for (const [role, modelName] of Object.entries(oldModels)) {
+            // 如果已经是 provider/model 格式则保留
+            models[role] = modelName.includes('/') ? modelName : `${oldProvider}/${modelName}`;
+        }
+    }
+
+    // 清理旧字段
+    const migrated = { ...raw };
+    delete migrated.provider;
+    delete migrated.apiKeys;
+    delete migrated.baseUrls;
+    migrated.providers = providers;
+    if (Object.keys(models).length > 0) {
+        migrated.models = models;
+    }
+
+    console.log('[Config] Migrated old config format to new providers format.');
+    return migrated;
+}
+
+/**
  * Loads the cascading configuration hierarchy:
  * 1. Global config (~/.config/meshy/config.json)
  * 2. Project config (.agent/config.json)
@@ -82,14 +142,25 @@ export function loadConfig(runtimeOverrides: Partial<Config> = {}): Config {
     const globalConfigPath = path.join(os.homedir(), '.config', 'meshy', 'config.json');
     const projectConfigPath = path.join(process.cwd(), '.agent', 'config.json');
 
-    const globalConfig = loadJsonConfig(globalConfigPath);
-    const projectConfig = loadJsonConfig(projectConfigPath);
+    let globalConfig = loadJsonConfig(globalConfigPath);
+    let projectConfig = loadJsonConfig(projectConfigPath);
 
-    // Parse environment variables that start with MESHY_
-    // Specific mappings could be added here.
-    const envConfig: Partial<Config> = {};
-    if (process.env.MESHY_PROVIDER) {
-        envConfig.provider = process.env.MESHY_PROVIDER;
+    // 向后兼容迁移
+    globalConfig = migrateOldConfig(globalConfig);
+    projectConfig = migrateOldConfig(projectConfig);
+
+    // 环境变量补充
+    const envProviders: Record<string, any> = {};
+    if (process.env.OPENAI_API_KEY) {
+        envProviders.openai = { protocol: 'openai', apiKey: process.env.OPENAI_API_KEY, baseUrl: process.env.OPENAI_BASE_URL };
+    }
+    if (process.env.ANTHROPIC_API_KEY) {
+        envProviders.anthropic = { protocol: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: process.env.ANTHROPIC_BASE_URL };
+    }
+
+    const envConfig: Record<string, any> = {};
+    if (Object.keys(envProviders).length > 0) {
+        envConfig.providers = envProviders;
     }
 
     // Merge order: Base Defaults -> Global -> Project -> Env -> Runtime
@@ -98,7 +169,7 @@ export function loadConfig(runtimeOverrides: Partial<Config> = {}): Config {
         globalConfig,
         projectConfig,
         envConfig,
-        runtimeOverrides
+        runtimeOverrides as Record<string, any>
     );
 
     return configSchema.parse(merged);
