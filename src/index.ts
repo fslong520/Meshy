@@ -14,6 +14,7 @@ interface ParsedArgs {
     model: string | null;
     port: number;
     file: string | null;
+    autoConfirm: boolean;
 }
 
 /**
@@ -36,6 +37,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         model: null,
         port: 9120,
         file: null,
+        autoConfirm: false,
     };
 
     // 快速检查第一个非 flag 参数是否为子命令
@@ -98,6 +100,12 @@ function parseArgs(argv: string[]): ParsedArgs {
             continue;
         }
 
+        if (arg === '-y' || arg === '--yes') {
+            result.autoConfirm = true;
+            i += 1;
+            continue;
+        }
+
         // 位置参数（prompt 文本）
         if (!arg.startsWith('-')) {
             positionals.push(arg);
@@ -135,7 +143,7 @@ async function readStdin(): Promise<string> {
 
 // ─── 主流程 ───
 
-export async function runMeshy(prompt: string, options?: { model?: string | null }) {
+export async function runMeshy(prompt: string, options?: { model?: string | null; autoConfirm?: boolean }) {
     // 1. Load configuration
     const config = loadConfig();
     const providerNames = Object.keys(config.providers);
@@ -179,6 +187,7 @@ export async function runMeshy(prompt: string, options?: { model?: string | null
     // 4. Start Task Engine
     const engine = new TaskEngine(providerResolver, activeWorkspace, session, {
         maxRetries: config.system.maxRetries,
+        executionMode: options?.autoConfirm ? 'yolo' as any : undefined,
     });
 
     if (isResuming) {
@@ -311,6 +320,7 @@ Options:
   -p, --print <prompt>    指定要执行的 Prompt (一次性模式)
   -m, --model <model>     指定模型 (e.g. zeabur/gpt-4o, openai/o3-mini)
   -f, --file <path>       指定要附带的文件 (未来版本)
+  -y, --yes               自动确认所有操作 (YOLO 模式, 跳过审批)
   --port <number>         Web Server 端口 (默认 9120)
   --daemon                启动 Web Server (兼容旧写法, 等同于 server)
 
@@ -319,6 +329,7 @@ Examples:
   meshy -p "Hello, are you ready?"
   meshy -m zeabur/gpt-4o "解释这段代码"
   meshy run -m openai/o3-mini "生成一个快速排序"
+  meshy -y "批量重命名所有文件"
   cat main.go | meshy -p "优化这段代码"
 `);
 }
@@ -346,7 +357,7 @@ if (isMainModule) {
                     printUsage();
                     process.exit(1);
                 }
-                return runMeshy(finalPrompt, { model: parsed.model });
+                return runMeshy(finalPrompt, { model: parsed.model, autoConfirm: parsed.autoConfirm });
             }).catch(console.error);
             break;
         }
