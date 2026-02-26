@@ -1,15 +1,141 @@
 import { loadConfig } from './config/index.js';
-import { OpenAIAdapter } from './core/llm/openai.js';
-import { AnthropicAdapter } from './core/llm/anthropic.js';
 import { Session } from './core/session/state.js';
 import { TaskEngine } from './core/engine/index.js';
-import { ILLMProvider } from './core/llm/provider.js';
 import { DaemonServer } from './core/daemon/server.js';
 import { WorkspaceManager } from './core/workspace/manager.js';
 import { SessionManager } from './core/session/manager.js';
 import { exportReplay, loadReplay } from './core/session/replay.js';
 
-export async function runMeshy(prompt: string) {
+// ─── CLI 参数解析 ───
+
+interface ParsedArgs {
+    subcommand: 'server' | 'run' | 'interactive';
+    prompt: string;
+    model: string | null;
+    port: number;
+    file: string | null;
+}
+
+/**
+ * 解析 CLI 参数，支持以下格式：
+ *
+ * meshy server [--port 9120]               → 启动 Web Dashboard
+ * meshy -p "prompt" [-m model]             → 一次性执行
+ * meshy --print "prompt" [-m model]        → 一次性执行（别名）
+ * meshy run "prompt" [-m model]            → 一次性执行（OpenCode 风格）
+ * meshy run -m model -f file "prompt"      → 指定文件 + 模型
+ * meshy "prompt"                           → 一次性执行（简写）
+ * meshy                                    → 交互式 REPL（未来）
+ */
+function parseArgs(argv: string[]): ParsedArgs {
+    const args = argv.slice(2); // 跳过 node + 脚本路径
+
+    const result: ParsedArgs = {
+        subcommand: 'interactive',
+        prompt: '',
+        model: null,
+        port: 9120,
+        file: null,
+    };
+
+    // 快速检查第一个非 flag 参数是否为子命令
+    const firstArg = args[0];
+
+    if (firstArg === 'server') {
+        result.subcommand = 'server';
+        // 解析 server 专用参数
+        const portIdx = args.indexOf('--port');
+        if (portIdx !== -1 && args[portIdx + 1]) {
+            result.port = parseInt(args[portIdx + 1], 10) || 9120;
+        }
+        return result;
+    }
+
+    if (firstArg === 'run') {
+        result.subcommand = 'run';
+        args.shift(); // 消费 'run'
+    }
+
+    // 解析 flags
+    const positionals: string[] = [];
+    let i = 0;
+    while (i < args.length) {
+        const arg = args[i];
+
+        if (arg === '-p' || arg === '--print') {
+            result.subcommand = 'run';
+            if (args[i + 1] && !args[i + 1].startsWith('-')) {
+                positionals.push(args[i + 1]);
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (arg === '-m' || arg === '--model') {
+            result.model = args[i + 1] || null;
+            i += 2;
+            continue;
+        }
+
+        if (arg === '-f' || arg === '--file') {
+            result.file = args[i + 1] || null;
+            i += 2;
+            continue;
+        }
+
+        if (arg === '--port') {
+            result.port = parseInt(args[i + 1], 10) || 9120;
+            i += 2;
+            continue;
+        }
+
+        // 兼容旧 --daemon flag
+        if (arg === '--daemon') {
+            result.subcommand = 'server';
+            i += 1;
+            continue;
+        }
+
+        // 位置参数（prompt 文本）
+        if (!arg.startsWith('-')) {
+            positionals.push(arg);
+        }
+
+        i += 1;
+    }
+
+    // 拼合位置参数为 prompt
+    if (positionals.length > 0) {
+        result.prompt = positionals.join(' ');
+        if (result.subcommand === 'interactive') {
+            result.subcommand = 'run';
+        }
+    }
+
+    return result;
+}
+
+// ─── Pipe / Stdin 检测 ───
+
+async function readStdin(): Promise<string> {
+    // 只有非 TTY（管道模式）才读取 stdin
+    if (process.stdin.isTTY) return '';
+
+    return new Promise((resolve) => {
+        let data = '';
+        process.stdin.setEncoding('utf-8');
+        process.stdin.on('data', (chunk) => { data += chunk; });
+        process.stdin.on('end', () => { resolve(data.trim()); });
+        // 设置超时，避免用户在交互模式意外挂起
+        setTimeout(() => resolve(data.trim()), 500);
+    });
+}
+
+// ─── 主流程 ───
+
+export async function runMeshy(prompt: string, options?: { model?: string | null }) {
     // 1. Load configuration
     const config = loadConfig();
     const providerNames = Object.keys(config.providers);
@@ -18,6 +144,12 @@ export async function runMeshy(prompt: string) {
     // 2. Initialize the Provider Resolver
     const { ProviderResolver } = await import('./core/llm/resolver.js');
     const providerResolver = new ProviderResolver(config);
+
+    // 如果指定了模型覆盖，立即切换
+    if (options?.model) {
+        providerResolver.switchModel(options.model);
+        console.log(`[Meshy] Model override: ${options.model}`);
+    }
 
     // 3. Initialize Workspace & Session
     const workspaceManager = new WorkspaceManager(providerResolver);
@@ -41,89 +173,12 @@ export async function runMeshy(prompt: string) {
             session = sessionManager.createSession();
         }
     } else {
-        // Try to list existing sessions to offer resume if not explicitly in a crash state
-        const history = sessionManager.listSessions();
-        if (history.length > 0 && !prompt) { // Only if no direct prompt provided
-            console.log('[Meshy] Recent sessions:');
-            history.slice(0, 5).forEach((s, i) => console.log(`  ${i + 1}. ${s.id} (${s.updatedAt})`));
-        }
         session = sessionManager.createSession();
     }
 
-    // 4. Start Daemon Server optionally (Phase 5)
-    const isDaemonMode = process.argv.includes('--daemon');
-    let daemon: DaemonServer | undefined;
-    if (isDaemonMode) {
-        daemon = new DaemonServer(9120);
-        daemon.start();
-
-        // 监听 Web UI 发来的独立任务
-        daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
-            console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
-            try {
-                await engine.runTask(submittedPrompt);
-                daemon?.broadcast('agent:done', { id });
-            } catch (err) {
-                console.error('[Meshy] Task from Web UI failed:', err);
-            }
-        });
-
-        daemon.on('workspace:list', (ws, msgId) => {
-            daemon?.sendResponse(ws, msgId, {
-                workspaces: workspaceManager.listWorkspaces()
-            });
-        });
-
-        daemon.on('session:list', (ws, msgId) => {
-            daemon?.sendResponse(ws, msgId, {
-                sessions: sessionManager.listSessions()
-            });
-        });
-
-        daemon.on('session:switch', async (sessionId: string, ws, msgId) => {
-            const newSession = sessionManager.loadSession(sessionId);
-            if (newSession) {
-                // In a real multi-session engine, we might swap the engine's session
-                // For now, we update the active engine's session or notify result
-                daemon?.sendResponse(ws, msgId, { success: true, sessionId });
-            } else {
-                daemon?.sendResponse(ws, msgId, { success: false, error: 'Session not found' });
-            }
-        });
-
-        // Dashboard RPCs
-        daemon.on('blackboard:get', (ws, msgId) => {
-            daemon?.sendResponse(ws, msgId, session.blackboard);
-        });
-
-        daemon.on('capsules:list', async (ws, msgId) => {
-            try {
-                const capsules = await activeWorkspace.memoryStore.getRecentCapsules(20);
-                daemon?.sendResponse(ws, msgId, capsules);
-            } catch (err) {
-                daemon?.sendResponse(ws, msgId, { error: 'Failed to fetch capsules' });
-            }
-        });
-
-        daemon.on('session:replay', (sessionId: string, ws, msgId) => {
-            if (session.id === sessionId) {
-                daemon?.sendResponse(ws, msgId, exportReplay(session));
-            } else {
-                const replayPath = `${activeWorkspace.rootPath}/.meshy/replays/${sessionId}.replay.json`;
-                const replay = loadReplay(replayPath);
-                if (replay) {
-                    daemon?.sendResponse(ws, msgId, replay);
-                } else {
-                    daemon?.sendResponse(ws, msgId, { error: 'Replay not found' });
-                }
-            }
-        });
-    }
-
-    // 5. Start Task Engine
+    // 4. Start Task Engine
     const engine = new TaskEngine(providerResolver, activeWorkspace, session, {
         maxRetries: config.system.maxRetries,
-        daemon: daemon,
     });
 
     if (isResuming) {
@@ -134,13 +189,95 @@ export async function runMeshy(prompt: string) {
         await engine.runTask(prompt);
     }
 
-    // 处理退出逻辑
-    if (isDaemonMode) {
-        console.log(`\n[Meshy] CLI Task completed or suspended. Daemon is still running for Web UI.`);
-    } else {
-        console.log(`\n[Meshy] Task completed. Exiting.`);
-        process.exit(0);
-    }
+    console.log(`\n[Meshy] Task completed. Exiting.`);
+    process.exit(0);
+}
+
+export async function runServer(port: number) {
+    const config = loadConfig();
+    const providerNames = Object.keys(config.providers);
+    console.log(`[Meshy] Loaded Config. Providers: [${providerNames.join(', ')}] | Default: ${config.models.default}`);
+
+    const { ProviderResolver } = await import('./core/llm/resolver.js');
+    const providerResolver = new ProviderResolver(config);
+
+    const workspaceManager = new WorkspaceManager(providerResolver);
+    const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
+    const sessionManager = new SessionManager(activeWorkspace.rootPath);
+    const session = sessionManager.createSession();
+
+    // 启动 Daemon Server
+    const daemon = new DaemonServer(port);
+    daemon.start();
+
+    const engine = new TaskEngine(providerResolver, activeWorkspace, session, {
+        maxRetries: config.system.maxRetries,
+        daemon,
+    });
+
+    // 监听 Web UI 发来的独立任务
+    daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
+        console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
+        try {
+            await engine.runTask(submittedPrompt);
+            daemon.broadcast('agent:done', { id });
+        } catch (err) {
+            console.error('[Meshy] Task from Web UI failed:', err);
+        }
+    });
+
+    daemon.on('workspace:list', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, {
+            workspaces: workspaceManager.listWorkspaces()
+        });
+    });
+
+    daemon.on('session:list', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, {
+            sessions: sessionManager.listSessions()
+        });
+    });
+
+    daemon.on('session:switch', async (sessionId: string, ws, msgId) => {
+        const newSession = sessionManager.loadSession(sessionId);
+        if (newSession) {
+            daemon.sendResponse(ws, msgId, { success: true, sessionId });
+        } else {
+            daemon.sendResponse(ws, msgId, { success: false, error: 'Session not found' });
+        }
+    });
+
+    // Dashboard RPCs
+    daemon.on('blackboard:get', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, session.blackboard);
+    });
+
+    daemon.on('capsules:list', async (ws, msgId) => {
+        try {
+            const capsules = await activeWorkspace.memoryStore.getRecentCapsules(20);
+            daemon.sendResponse(ws, msgId, capsules);
+        } catch (err) {
+            daemon.sendResponse(ws, msgId, { error: 'Failed to fetch capsules' });
+        }
+    });
+
+    daemon.on('session:replay', (sessionId: string, ws, msgId) => {
+        if (session.id === sessionId) {
+            daemon.sendResponse(ws, msgId, exportReplay(session));
+        } else {
+            const replayPath = `${activeWorkspace.rootPath}/.meshy/replays/${sessionId}.replay.json`;
+            const replay = loadReplay(replayPath);
+            if (replay) {
+                daemon.sendResponse(ws, msgId, replay);
+            } else {
+                daemon.sendResponse(ws, msgId, { error: 'Replay not found' });
+            }
+        }
+    });
+
+    console.log(`\n[Meshy] Server mode active. Waiting for connections on port ${port}...`);
+    console.log(`[Meshy] Open http://localhost:${port} in your browser.`);
+    // 保持进程活跃，不退出
 }
 
 /**
@@ -159,9 +296,65 @@ function promptUser(question: string): Promise<string> {
     });
 }
 
-// CLI entry point stub
-const isMainModule = process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWith('index.js');
+function printUsage(): void {
+    console.log(`
+Meshy — Advanced Multi-Agent AI Framework
+
+Usage:
+  meshy                              进入交互式模式 (REPL, 未来版本)
+  meshy server [--port 9120]         启动 Web Dashboard + WebSocket 守护进程
+  meshy -p "prompt"                  一次性执行任务
+  meshy run "prompt"                 一次性执行任务 (OpenCode 风格)
+  meshy "prompt"                     一次性执行任务 (简写)
+
+Options:
+  -p, --print <prompt>    指定要执行的 Prompt (一次性模式)
+  -m, --model <model>     指定模型 (e.g. zeabur/gpt-4o, openai/o3-mini)
+  -f, --file <path>       指定要附带的文件 (未来版本)
+  --port <number>         Web Server 端口 (默认 9120)
+  --daemon                启动 Web Server (兼容旧写法, 等同于 server)
+
+Examples:
+  meshy server
+  meshy -p "Hello, are you ready?"
+  meshy -m zeabur/gpt-4o "解释这段代码"
+  meshy run -m openai/o3-mini "生成一个快速排序"
+  cat main.go | meshy -p "优化这段代码"
+`);
+}
+
+// ─── CLI 入口 ───
+const isMainModule = process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWith('index.js') || process.argv[1]?.endsWith('index.mjs');
+
 if (isMainModule) {
-    const userPrompt = process.argv.slice(2).join(' ') || 'Hello, are you ready?';
-    runMeshy(userPrompt).catch(console.error);
+    const parsed = parseArgs(process.argv);
+
+    switch (parsed.subcommand) {
+        case 'server':
+            runServer(parsed.port).catch(console.error);
+            break;
+
+        case 'run': {
+            // 支持 pipe 模式: cat file | meshy -p "prompt"
+            readStdin().then((stdinData) => {
+                let finalPrompt = parsed.prompt;
+                if (stdinData) {
+                    finalPrompt = stdinData + (finalPrompt ? `\n\nUser instruction: ${finalPrompt}` : '');
+                }
+                if (!finalPrompt) {
+                    console.error('[Meshy] Error: No prompt provided.');
+                    printUsage();
+                    process.exit(1);
+                }
+                return runMeshy(finalPrompt, { model: parsed.model });
+            }).catch(console.error);
+            break;
+        }
+
+        case 'interactive':
+        default:
+            // 无参数：显示帮助信息（未来可以进入 REPL）
+            printUsage();
+            break;
+    }
 }

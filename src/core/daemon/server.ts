@@ -15,6 +15,35 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * 解析 public/ 静态资源目录。
+ * 兼容 ESM (import.meta.url) 和 CJS (__dirname) 两种打包产物。
+ */
+function resolvePublicDir(): string {
+    const candidates: string[] = [];
+
+    // 方案 1: 基于 __dirname（CJS 或 tsup 注入）
+    if (typeof __dirname !== 'undefined') {
+        candidates.push(path.resolve(__dirname, '..', 'public'));
+    }
+
+    // 方案 2: 基于 process.argv[1]（入口脚本所在目录）
+    if (process.argv[1]) {
+        candidates.push(path.resolve(path.dirname(process.argv[1]), '..', 'public'));
+        candidates.push(path.resolve(path.dirname(process.argv[1]), 'public'));
+    }
+
+    // 方案 3: process.cwd()（开发模式 / 全局 fallback）
+    candidates.push(path.join(process.cwd(), 'public'));
+
+    for (const c of candidates) {
+        if (fs.existsSync(path.join(c, 'index.html'))) return c;
+    }
+
+    // 最终降级
+    return candidates[0] || path.join(process.cwd(), 'public');
+}
+
 // ─── RPC 消息协议 ───
 export interface RpcMessage {
     id?: string;
@@ -56,7 +85,8 @@ export class DaemonServer extends EventEmitter {
      * 启动 HTTP 静态服务 + WebSocket 守护进程。
      */
     public start(): void {
-        const publicDir = path.join(process.cwd(), 'public');
+        const publicDir = resolvePublicDir();
+        console.log(`[Daemon] Serving static files from: ${publicDir}`);
 
         this.httpServer = http.createServer((req, res) => {
             // 简单静态文件服务
