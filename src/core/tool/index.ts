@@ -34,6 +34,7 @@ import { GrepTool } from './grep.js';
 import { LsTool } from './ls.js';
 import { WebFetchTool } from './webfetch.js';
 import { WebSearchTool } from './websearch.js';
+import { createBlackboardTools } from './builtin/board.js';
 
 /**
  * 创建一个预注册了所有内置工具的 ToolRegistry 实例。
@@ -55,6 +56,9 @@ export function createDefaultRegistry(): ToolRegistry {
 
     // manageTools 接收 catalog 和 ragIndex
     registry.register(createManageToolsDefinition(catalog, catalog.getRagIndex()));
+
+    // Phase 10: 协作黑板工具（常驻可用）
+    registry.registerAll(createBlackboardTools());
 
     return registry;
 }

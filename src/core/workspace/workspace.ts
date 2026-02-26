@@ -6,6 +6,8 @@ import { ReflectionEngine } from '../memory/reflection.js';
 import { ILLMProvider } from '../llm/provider.js';
 import path from 'path';
 import fs from 'fs';
+import { RepoMapGenerator } from '../context/repo-map.js';
+import { CollaborativeBlackboard } from './blackboard.js';
 
 export interface WorkspaceConfig {
     name: string;
@@ -19,8 +21,10 @@ export class Workspace {
     public readonly lspManager: LSPManager;
     public readonly snapshotManager: SnapshotManager;
     public readonly reflectionEngine: ReflectionEngine;
+    public readonly blackboard: CollaborativeBlackboard;
 
     private config: WorkspaceConfig;
+    private repoMapCache: string | null = null;
 
     constructor(rootPath: string, llmProvider: ILLMProvider, embeddingProvider: any) {
         this.rootPath = path.resolve(rootPath);
@@ -42,6 +46,7 @@ export class Workspace {
 
         this.lspManager = new LSPManager();
         this.snapshotManager = new SnapshotManager(this.rootPath);
+        this.blackboard = new CollaborativeBlackboard(this.rootPath);
     }
 
     private loadConfig(): WorkspaceConfig {
@@ -66,6 +71,18 @@ export class Workspace {
 
     public getIgnorePaths(): string[] {
         return this.config.ignorePaths;
+    }
+
+    public getRepoMap(): string {
+        if (!this.repoMapCache) {
+            const generator = new RepoMapGenerator(this.rootPath, { ignorePatterns: this.getIgnorePaths() });
+            this.repoMapCache = generator.generate();
+        }
+        return this.repoMapCache;
+    }
+
+    public refreshRepoMap(): void {
+        this.repoMapCache = null;
     }
 
     public dispose() {

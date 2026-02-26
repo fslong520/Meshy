@@ -24,6 +24,7 @@ export class SystemPromptBuilder {
     private skillSections: string[] = [];
     private catalogAdvert: string | null = null;
     private memoryHint: string | null = null;
+    private repoMap: string | null = null;
     private contextBlocks: string[] = [];
     private constraints: string[] = [];
 
@@ -63,6 +64,12 @@ export class SystemPromptBuilder {
         return this;
     }
 
+    /** 注入整个项目的代码大纲地图 */
+    withRepoMap(map: string): this {
+        this.repoMap = map;
+        return this;
+    }
+
     /** 通过 @file: 或 @terminal: 引入的上下文块 */
     withContextBlock(label: string, content: string): this {
         this.contextBlocks.push(
@@ -81,37 +88,46 @@ export class SystemPromptBuilder {
     build(): string {
         const parts: string[] = [];
 
+        // --- STATIC PREFIX (Highly Cacheable) ---
+
         // 1. 核心身份（Persona 优先于 basePrompt）
         parts.push(this.persona ?? this.basePrompt);
 
-        // 2. 路由提示
+        // 2. RepoMap
+        if (this.repoMap) {
+            parts.push(`\n<repository_map>\n${this.repoMap}\n</repository_map>\n`);
+        }
+
+        // 3. ToolCatalog 广告
+        if (this.catalogAdvert) {
+            parts.push(this.catalogAdvert);
+        }
+
+        // 4. 技能段
+        for (const section of this.skillSections) {
+            parts.push(section);
+        }
+
+        // 5. 经验回放
+        if (this.memoryHint) {
+            parts.push(this.memoryHint);
+        }
+
+        // --- DYNAMIC SUFFIX (Session/Turn Specific) ---
+
+        // 6. 路由提示
         if (this.routingHint) {
             parts.push(this.routingHint);
         }
 
-        // 3. 模式约束
+        // 7. 模式约束
         if (this.constraints.length > 0) {
             parts.push(
                 `**Constraints for this session:**\n${this.constraints.map(c => `- ${c}`).join('\n')}`
             );
         }
 
-        // 4. 经验回放
-        if (this.memoryHint) {
-            parts.push(this.memoryHint);
-        }
-
-        // 5. ToolCatalog 广告
-        if (this.catalogAdvert) {
-            parts.push(this.catalogAdvert);
-        }
-
-        // 6. 技能段
-        for (const section of this.skillSections) {
-            parts.push(section);
-        }
-
-        // 7. 上下文块
+        // 8. 上下文块
         if (this.contextBlocks.length > 0) {
             parts.push(this.contextBlocks.join('\n'));
         }

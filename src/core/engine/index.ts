@@ -236,6 +236,7 @@ export class TaskEngine {
             : '';
 
         const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+            .withRepoMap(this.workspace.getRepoMap())
             .withRoutingHint(decision.systemPromptHint);
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
