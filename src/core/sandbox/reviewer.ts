@@ -26,8 +26,9 @@ Action Type: ${actionType}
 Detail: ${detail}
 
 Safety Rules:
-1. SAFE: Standard secure local development tasks (e.g., git commit, code compilation, running unit tests, creating components, modifying project code).
-2. UNSAFE: Deleting large numbers of files/directories (like rm -rf), mutating databases destructively, network anomalies not related to package managers, accessing strict environment keys.
+1. SAFE: Standard secure local development tasks (git commit, compiling, testing, creating files).
+2. SAFE: Standard outbound network requests to fetch public APIs, raw code via https (like raw.githubusercontent.com), crawling documentation, or downloading public packages.
+3. UNSAFE: Deleting large numbers of files/directories (like rm -rf), destructive database mutations, exfiltrating local environment variables, deploying to unknown servers.
 3. If you are uncertain about its intent, default to UNSAFE.
 
 Output pure JSON only, matching exactly this structure:
