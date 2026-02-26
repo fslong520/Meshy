@@ -27,6 +27,7 @@ export class SystemPromptBuilder {
     private repoMap: string | null = null;
     private contextBlocks: string[] = [];
     private constraints: string[] = [];
+    private ritualContext: string | null = null;
 
     constructor(basePrompt: string) {
         this.basePrompt = basePrompt;
@@ -84,6 +85,12 @@ export class SystemPromptBuilder {
         return this;
     }
 
+    /** Phase 16: Ritual 上下文注入（SOUL.md / BOOTSTRAP.md） */
+    withRitualContext(ritualContext: string): this {
+        this.ritualContext = ritualContext;
+        return this;
+    }
+
     /** 组装最终的 System Prompt 字符串 */
     build(): string {
         const parts: string[] = [];
@@ -92,6 +99,11 @@ export class SystemPromptBuilder {
 
         // 1. 核心身份（Persona 优先于 basePrompt）
         parts.push(this.persona ?? this.basePrompt);
+
+        // 1.5 Ritual 上下文（人格指令）
+        if (this.ritualContext) {
+            parts.push(this.ritualContext);
+        }
 
         // 2. RepoMap
         if (this.repoMap) {

@@ -29,6 +29,8 @@ import { Logger, initLogger } from '../logger/index.js';
 import { createTodoWriteTool, createTodoReadTool } from '../tool/todo.js';
 import { CompactionAgent } from '../session/compaction.js';
 import { CustomCommandRegistry } from '../commands/loader.js';
+import { RitualLoader } from '../ritual/loader.js';
+import { exportReplay, saveReplay, formatReplayText } from '../session/replay.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -75,6 +77,9 @@ export class TaskEngine {
     // Phase 15: Custom Commands
     private customCommands: CustomCommandRegistry;
 
+    // Phase 16: Ritual Files
+    private ritualLoader: RitualLoader;
+
     constructor(providerResolver: ProviderResolver, workspace: Workspace, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
         this.workspace = workspace;
@@ -98,6 +103,10 @@ export class TaskEngine {
         // Phase 15: Custom Commands
         this.customCommands = new CustomCommandRegistry(workspace.rootPath);
         this.customCommands.scan();
+
+        // Phase 16: Ritual Files
+        this.ritualLoader = new RitualLoader(workspace.rootPath);
+        this.ritualLoader.load();
 
         // Phase 3 init
         this.daemon = options.daemon;
@@ -244,8 +253,15 @@ export class TaskEngine {
                         await this.sessionManager.archiveSession(this.session);
                         console.log(`[Session] Session "${this.session.id}" archived and reflection triggered.`);
                         break;
+                    case 'replay': {
+                        const replay = exportReplay(this.session);
+                        const filePath = saveReplay(replay, this.workspace.rootPath);
+                        console.log(formatReplayText(replay));
+                        console.log(`\n[Session] Replay saved to: ${filePath}`);
+                        break;
+                    }
                     default:
-                        console.log('[Session] Unknown sub-command. Use: list, save, load <id>, archive');
+                        console.log('[Session] Unknown sub-command. Use: list, save, load <id>, archive, replay');
                 }
                 break;
             }
@@ -455,6 +471,13 @@ export class TaskEngine {
         if (memoryHint) builder.withMemoryHint(memoryHint);
         if (catalogAdvert || mcpAdvert) {
             builder.withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+        }
+
+        // Phase 16: Ritual 上下文注入
+        const isFirstTurn = this.session.history.length === 0;
+        const ritualContext = this.ritualLoader.buildPromptInjection(isFirstTurn);
+        if (ritualContext) {
+            builder.withRitualContext(ritualContext);
         }
 
         // 注入 @file: 引用的文件内容到上下文
