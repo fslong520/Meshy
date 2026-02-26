@@ -15,7 +15,7 @@ export class SnapshotManager {
     private latestFile: string;
 
     constructor(workspaceRoot: string = process.cwd()) {
-        const agentDir = path.join(workspaceRoot, '.agent');
+        const agentDir = path.join(workspaceRoot, '.meshy');
         this.sessionsDir = path.join(agentDir, 'sessions');
         this.latestFile = path.join(this.sessionsDir, 'latest.txt');
 

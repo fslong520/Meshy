@@ -19,8 +19,7 @@ import { createDefaultToolPackRegistry } from '../tool/tool-pack.js';
 import { z } from 'zod';
 import { loadConfig } from '../../config/index.js';
 import { executeDelegate } from '../tool/delegate-tool.js';
-import { McpHostRuntime } from '../mcp/host.js';
-import { SnapshotManager } from '../session/snapshot.js';
+import { Workspace } from '../workspace/workspace.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -33,6 +32,7 @@ const BASE_SYSTEM_PROMPT = 'You are Meshy, an advanced multi-agent AI assistant.
 
 export class TaskEngine {
     private providerResolver: ProviderResolver;
+    public readonly workspace: Workspace;
     private aci: AgentComputerInterface;
     private session: Session;
     private maxRetries: number;
@@ -45,28 +45,18 @@ export class TaskEngine {
 
     // Phase 3 组件
     private sandbox: ExecutionSandbox;
-    private lspManager: LSPManager;
     private daemon?: DaemonServer;
 
     // Phase 7 Circuit Breaker
     private editAutoFixRetries: Map<string, number> = new Map();
     private MAX_AUTOFIX_RETRIES = 3;
 
-    // Phase 4 组件
-    private memoryStore: MemoryStore;
-    private reflectionEngine: ReflectionEngine;
-
     // Tool System
     private toolRegistry: ToolRegistry;
 
-    // MCP Host
-    private mcpHost: McpHostRuntime;
-
-    // Snapshot Manager (Phase 5)
-    private snapshotManager: SnapshotManager;
-
-    constructor(providerResolver: ProviderResolver, session: Session, options: EngineOptions = {}) {
+    constructor(providerResolver: ProviderResolver, workspace: Workspace, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
+        this.workspace = workspace;
         this.session = session;
         this.aci = new AgentComputerInterface();
 
@@ -90,17 +80,6 @@ export class TaskEngine {
             ?? (this.daemon ? this.daemon.requestApproval.bind(this.daemon) : this.defaultAskUser);
         const reviewer = new AISecondaryReviewer(this.providerResolver);
         this.sandbox = new ExecutionSandbox(options.executionMode || 'smart', askUser, reviewer);
-        this.lspManager = new LSPManager();
-
-        // Phase 4 init
-        const embeddingProvider = this.providerResolver.getEmbeddingProvider();
-        this.memoryStore = new MemoryStore(process.cwd(), embeddingProvider);
-        this.reflectionEngine = new ReflectionEngine(this.providerResolver.getProvider(), this.memoryStore);
-
-        // Phase 5 init (MCP & Snapshot)
-        this.mcpHost = new McpHostRuntime(process.cwd());
-        this.mcpHost.loadConfig();
-        this.snapshotManager = new SnapshotManager(process.cwd());
 
         // Tool System init: 注册内置工具 + ACI 工具
         this.toolRegistry = createDefaultRegistry();
@@ -191,9 +170,9 @@ export class TaskEngine {
                     const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
 
                     // 补充 MCP 广告
-                    const mcpSummaries = this.mcpHost.getServerSummaries();
+                    const mcpSummaries = this.workspace.mcpHost.getServerSummaries();
                     const mcpAdvert = mcpSummaries.length > 0
-                        ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+                        ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map((s: any) => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
                         : '';
 
                     const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
@@ -222,10 +201,10 @@ export class TaskEngine {
      */
     public async runTask(userPrompt: string): Promise<void> {
         // Phase 4: 初始化记忆库
-        await this.memoryStore.initialize();
-
-        // Phase 5: 启动开机自启的 MCP Servers
-        await this.mcpHost.ensureAutoStartServers();
+        await this.workspace.memoryStore.initialize();
+        +
+            // Phase 5: 启动开机自启的 MCP Servers
+            await this.workspace.mcpHost.ensureAutoStartServers();
 
         // ── Phase 2: 输入语法解析 ──
         const parsed = InputParser.parse(userPrompt);
@@ -243,15 +222,15 @@ export class TaskEngine {
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
         // ── Phase 4: 被动召回历史经验 ──
-        const memoryHint = await this.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
+        const memoryHint = await this.workspace.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
 
         // ── Phase 2: 使用 SystemPromptBuilder 组装 Prompt ──
         const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
 
         // 补充 MCP 广告
-        const mcpSummaries = this.mcpHost.getServerSummaries();
+        const mcpSummaries = this.workspace.mcpHost.getServerSummaries();
         const mcpAdvert = mcpSummaries.length > 0
-            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map((s: any) => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
             : '';
 
         const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
@@ -284,7 +263,7 @@ export class TaskEngine {
         await this.runLLMLoop(injection);
 
         // 如果全部完成，清除快照以防下次误报
-        this.snapshotManager.clearSnapshot(this.session.id);
+        this.workspace.snapshotManager.clearSnapshot(this.session.id);
     }
 
     /**
@@ -295,14 +274,14 @@ export class TaskEngine {
         console.log(`[Engine] Resuming interrupted session: ${this.session.id}`);
 
         // Phase 4 & 5 依赖初始化
-        await this.memoryStore.initialize();
-        await this.mcpHost.ensureAutoStartServers();
+        await this.workspace.memoryStore.initialize();
+        await this.workspace.mcpHost.ensureAutoStartServers();
 
         // 重新获取 catalog 和 mcp
         const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
-        const mcpSummaries = this.mcpHost.getServerSummaries();
+        const mcpSummaries = this.workspace.mcpHost.getServerSummaries();
         const mcpAdvert = mcpSummaries.length > 0
-            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map(s => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
+            ? '\n\nAvailable MCP Servers:\n' + mcpSummaries.map((s: any) => `- [${s.name}] (${s.status}): ${s.description}`).join('\n')
             : '';
 
         const resumePrompt = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
@@ -317,7 +296,7 @@ export class TaskEngine {
             subagent: null as any // 恢复暂不支持 subagent 上下文
         });
 
-        this.snapshotManager.clearSnapshot(this.session.id);
+        this.workspace.snapshotManager.clearSnapshot(this.session.id);
     }
 
     /**
@@ -330,7 +309,7 @@ export class TaskEngine {
         while (!isDone && retries < this.maxRetries) {
             try {
                 const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
-                const mcpTools = this.mcpHost.getAllTools();
+                const mcpTools = this.workspace.mcpHost.getAllTools();
                 const allTools = [...registryTools, ...mcpTools, ...injection.tools];
 
                 const prompt: StandardPrompt = {
@@ -388,7 +367,7 @@ export class TaskEngine {
                 });
 
                 // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
-                this.snapshotManager.snapshot(this.session);
+                this.workspace.snapshotManager.snapshot(this.session);
 
                 const result = await this.executeTool(currentToolCall.name, parsedArgs);
                 this.daemon?.broadcast('agent:tool_result', { tool: currentToolCall.name, success: true });
@@ -402,7 +381,7 @@ export class TaskEngine {
                 });
 
                 // Phase 5: 响应也写入快照
-                this.snapshotManager.snapshot(this.session);
+                this.workspace.snapshotManager.snapshot(this.session);
 
             } catch (err: unknown) {
                 retries++;
@@ -421,21 +400,21 @@ export class TaskEngine {
 
         this.session.clearActivatedTools();
         this.daemon?.broadcast('agent:done', {});
-        this.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
+        this.workspace.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
     }
 
     /**
      * Phase 4: 接收用户反馈（点赞/踩），触发经验标记与持久化。
      */
     public async submitFeedback(feedback: FeedbackType): Promise<void> {
-        await this.reflectionEngine.onUserFeedback(this.session, feedback);
+        await this.workspace.reflectionEngine.onUserFeedback(this.session, feedback);
     }
 
     // ─── ACI 工具注册到 ToolRegistry ───
     private registerAciTools(): void {
         const self = this;
         const aci = this.aci;
-        const lsp = this.lspManager;
+        const lsp = this.workspace.lspManager;
         const daemon = this.daemon;
 
         this.toolRegistry.register(defineTool('readFile', {

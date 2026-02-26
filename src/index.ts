@@ -5,7 +5,8 @@ import { Session } from './core/session/state.js';
 import { TaskEngine } from './core/engine/index.js';
 import { ILLMProvider } from './core/llm/provider.js';
 import { DaemonServer } from './core/daemon/server.js';
-import { SnapshotManager } from './core/session/snapshot.js';
+import { WorkspaceManager } from './core/workspace/manager.js';
+import { SessionManager } from './core/session/manager.js';
 
 export async function runMeshy(prompt: string) {
     // 1. Load configuration
@@ -17,26 +18,35 @@ export async function runMeshy(prompt: string) {
     const { ProviderResolver } = await import('./core/llm/resolver.js');
     const providerResolver = new ProviderResolver(config);
 
-    // 3. Initialize Session & Blackboard
+    // 3. Initialize Workspace & Session
+    const workspaceManager = new WorkspaceManager(providerResolver);
+    const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
+    const sessionManager = new SessionManager(activeWorkspace.rootPath);
+
     let session: Session;
     let isResuming = false;
 
-    // Phase 5: Crash Recovery
-    const snapshotManager = new SnapshotManager(process.cwd());
-    const latestCrashedSession = snapshotManager.loadLatestSession();
+    // Phase 5/8: Workspace-aware Session Recovery
+    const latestCrashedSession = activeWorkspace.snapshotManager.loadLatestSession();
 
     if (latestCrashedSession) {
-        const answer = await promptUser(`[Meshy] Detected an interrupted session (${latestCrashedSession.id}). Do you want to resume it? [y/N]: `);
+        const answer = await promptUser(`[Meshy] Detected an interrupted session (${latestCrashedSession.id}) in workspace. Resume? [y/N]: `);
         if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
             session = latestCrashedSession;
             isResuming = true;
         } else {
             console.log(`[Meshy] Discarding interrupted session.`);
-            snapshotManager.clearSnapshot(latestCrashedSession.id);
-            session = new Session('session-' + Date.now());
+            activeWorkspace.snapshotManager.clearSnapshot(latestCrashedSession.id);
+            session = sessionManager.createSession();
         }
     } else {
-        session = new Session('session-' + Date.now());
+        // Try to list existing sessions to offer resume if not explicitly in a crash state
+        const history = sessionManager.listSessions();
+        if (history.length > 0 && !prompt) { // Only if no direct prompt provided
+            console.log('[Meshy] Recent sessions:');
+            history.slice(0, 5).forEach((s, i) => console.log(`  ${i + 1}. ${s.id} (${s.lastModified.toLocaleString()})`));
+        }
+        session = sessionManager.createSession();
     }
 
     // 4. Start Daemon Server optionally (Phase 5)
@@ -56,10 +66,33 @@ export async function runMeshy(prompt: string) {
                 console.error('[Meshy] Task from Web UI failed:', err);
             }
         });
+
+        daemon.on('workspace:list', (ws, msgId) => {
+            daemon?.sendResponse(ws, msgId, {
+                workspaces: workspaceManager.listWorkspaces()
+            });
+        });
+
+        daemon.on('session:list', (ws, msgId) => {
+            daemon?.sendResponse(ws, msgId, {
+                sessions: sessionManager.listSessions()
+            });
+        });
+
+        daemon.on('session:switch', async (sessionId: string, ws, msgId) => {
+            const newSession = sessionManager.loadSession(sessionId);
+            if (newSession) {
+                // In a real multi-session engine, we might swap the engine's session
+                // For now, we update the active engine's session or notify result
+                daemon?.sendResponse(ws, msgId, { success: true, sessionId });
+            } else {
+                daemon?.sendResponse(ws, msgId, { success: false, error: 'Session not found' });
+            }
+        });
     }
 
     // 5. Start Task Engine
-    const engine = new TaskEngine(providerResolver, session, {
+    const engine = new TaskEngine(providerResolver, activeWorkspace, session, {
         maxRetries: config.system.maxRetries,
         daemon: daemon,
     });

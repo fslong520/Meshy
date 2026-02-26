@@ -34,6 +34,8 @@ export type DaemonEventType =
     | 'agent:error'           // 错误
     | 'sandbox:approval'      // 沙盒审批请求（等待人类确认）
     | 'session:update'        // Session 状态变更
+    | 'workspace:list'        // 工作区列表
+    | 'session:list'          // 会话列表
     | 'router:decision';      // 路由决策通知
 
 export class DaemonServer extends EventEmitter {
@@ -195,6 +197,22 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'workspace:list': {
+                this.emit('workspace:list', ws, msg.id);
+                break;
+            }
+
+            case 'session:list': {
+                this.emit('session:list', ws, msg.id);
+                break;
+            }
+
+            case 'session:switch': {
+                const sessionId = msg.params?.sessionId as string;
+                this.emit('session:switch', sessionId, ws, msg.id);
+                break;
+            }
+
             default:
                 this.sendTo(ws, {
                     id: msg.id,
@@ -203,6 +221,18 @@ export class DaemonServer extends EventEmitter {
                     error: `Unknown method: ${msg.method}`,
                 });
         }
+    }
+
+    /**
+     * 向单个客户端发送响应消息。
+     */
+    public sendResponse(ws: WebSocket, id: string | undefined, result: unknown): void {
+        this.sendTo(ws, {
+            id,
+            type: 'response',
+            method: 'unknown', // RPC 响应通常不需要 method，或者保留原 method
+            result,
+        });
     }
 
     /**
