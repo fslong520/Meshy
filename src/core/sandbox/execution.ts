@@ -12,6 +12,8 @@
 // ─── 执行模式枚举 ───
 export type ExecutionMode = 'yolo' | 'smart' | 'default' | 'plan' | 'accept_edits';
 
+import { PermissionNext, PermissionAction } from './permission.js';
+
 // ─── 操作风险等级 ───
 export type RiskLevel = 'safe' | 'moderate' | 'dangerous';
 
@@ -102,6 +104,9 @@ export class ExecutionSandbox {
     private askUser: AskUserCallback;
     private reviewer?: AISecondaryReviewer;
 
+    // Phase 15.1: 级联权限引擎
+    public readonly permission: PermissionNext;
+
     constructor(
         mode: ExecutionMode = 'default',
         askUser: AskUserCallback,
@@ -110,6 +115,30 @@ export class ExecutionSandbox {
         this.mode = mode;
         this.askUser = askUser;
         this.reviewer = reviewer;
+
+        // 初始化 PermissionNext，使用原来的白名单作为 Base 层
+        this.permission = new PermissionNext({
+            'read_file': 'allow', // 读操作默认安全
+            'run_command:git *': 'allow',
+            'run_command:ls *': 'allow',
+            'run_command:dir *': 'allow',
+            'run_command:cat *': 'allow',
+            'run_command:type *': 'allow',
+            'run_command:echo *': 'allow',
+            'run_command:pwd *': 'allow',
+            'run_command:cd *': 'allow',
+            'run_command:node --version': 'allow',
+            'run_command:npm ls *': 'allow',
+            'run_command:npm list *': 'allow',
+            'run_command:npm audit *': 'allow',
+            'run_command:npm outdated *': 'allow',
+            // 一些危险命令的黑名单形式，可以在 Base 层里定义
+            'run_command:rm -rf *': 'deny',
+            'run_command:rmdir /s *': 'deny',
+            'run_command:del /s *': 'deny',
+            'run_command:mkfs.*': 'deny',
+            'run_command:dd *': 'deny',
+        });
     }
 
     public getMode(): ExecutionMode {
@@ -122,9 +151,24 @@ export class ExecutionSandbox {
 
     /**
      * 请求执行某个操作的审批。
-     * 根据当前沙盒模式和操作的风险等级，决定是否放行。
+     * 结合 PermissionNext 和原来的沙盒模式。
      */
     public async requestApproval(actionType: ActionType, detail: string): Promise<ApprovalResult> {
+        // 先检查 Permission Cascade
+        const permAction = this.permission.check(actionType, detail);
+
+        if (permAction === 'deny') {
+            return {
+                approved: false,
+                reason: `Permission denied by cascade rule for ${actionType}.`
+            };
+        }
+
+        if (permAction === 'allow') {
+            return { approved: true };
+        }
+
+        // permAction === 'ask', 降级到原有的模式逻辑
         const risk = classifyRisk(actionType, detail);
 
         switch (this.mode) {

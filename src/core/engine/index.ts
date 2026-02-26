@@ -28,6 +28,7 @@ import { WorkflowEngine, loadWorkflows } from '../workflow/engine.js';
 import { Logger, initLogger } from '../logger/index.js';
 import { createTodoWriteTool, createTodoReadTool } from '../tool/todo.js';
 import { CompactionAgent } from '../session/compaction.js';
+import { CustomCommandRegistry } from '../commands/loader.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -71,6 +72,9 @@ export class TaskEngine {
     // Phase 14: Compaction Agent
     private compactionAgent: CompactionAgent;
 
+    // Phase 15: Custom Commands
+    private customCommands: CustomCommandRegistry;
+
     constructor(providerResolver: ProviderResolver, workspace: Workspace, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
         this.workspace = workspace;
@@ -90,6 +94,10 @@ export class TaskEngine {
         this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry, this.toolRegistry, toolPackRegistry);
         this.skillRegistry.scan();
         this.subagentRegistry.scan();
+
+        // Phase 15: Custom Commands
+        this.customCommands = new CustomCommandRegistry(workspace.rootPath);
+        this.customCommands.scan();
 
         // Phase 3 init
         this.daemon = options.daemon;
@@ -161,6 +169,14 @@ export class TaskEngine {
                     '  /compact          — Compress conversation history',
                     '  /help             — Show this help',
                 ].join('\n'));
+                // Phase 15: 列出自定义命令
+                const customCmds = this.customCommands.listCommands();
+                if (customCmds.length > 0) {
+                    console.log('\nCustom commands (.meshy/commands/):');
+                    for (const cmd of customCmds) {
+                        console.log(`  /${cmd.name.padEnd(16)} — ${cmd.description || '(no description)'}`);
+                    }
+                }
                 break;
 
             case 'model': {
@@ -373,6 +389,45 @@ export class TaskEngine {
         if (parsed.slashCommand) {
             await this.handleSlashCommand(parsed.slashCommand, parsed);
             return;
+        }
+
+        // Phase 15: 自定义 Markdown 命令拦截
+        if (userPrompt.startsWith('/')) {
+            const spaceIdx = userPrompt.indexOf(' ');
+            const cmdName = spaceIdx > 0
+                ? userPrompt.slice(1, spaceIdx).toLowerCase()
+                : userPrompt.slice(1).toLowerCase();
+            const cmdArgs = spaceIdx > 0 ? userPrompt.slice(spaceIdx + 1).trim() : '';
+
+            if (this.customCommands.has(cmdName)) {
+                const renderedPrompt = this.customCommands.renderPrompt(cmdName, cmdArgs);
+                if (renderedPrompt) {
+                    const cmdConfig = this.customCommands.getCommand(cmdName)!;
+                    this.logger.engine(`Executing custom command: /${cmdName}`, { args: cmdArgs });
+
+                    // 将渲染后的 prompt 作为用户消息注入
+                    this.session.addMessage({ role: 'user', content: renderedPrompt });
+
+                    // 使用命令绑定的模型或默认模型
+                    const decision = await this.router.classify(renderedPrompt);
+                    const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
+                        .withRoutingHint(decision.systemPromptHint);
+
+                    const basePrompt = builder.build();
+                    const injectionParsed = InputParser.parse(renderedPrompt);
+                    const injection = await this.injector.resolve(
+                        injectionParsed, decision, basePrompt, this.session, this.providerResolver,
+                    );
+
+                    // 如果命令指定了特定模型
+                    if (cmdConfig.model) {
+                        injection.subagent = { ...(injection.subagent || {} as any), model: cmdConfig.model };
+                    }
+
+                    await this.runLLMLoop(injection);
+                    return;
+                }
+            }
         }
 
         this.session.addMessage({ role: 'user', content: userPrompt });

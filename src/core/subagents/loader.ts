@@ -124,11 +124,11 @@ export class SubagentRegistry {
     private agentsDir: string;
 
     constructor(workspaceRoot: string = process.cwd()) {
-        this.agentsDir = path.join(workspaceRoot, '.agent', 'subagents');
+        this.agentsDir = path.join(workspaceRoot, '.meshy', 'agents');
     }
 
     /**
-     * 扫描 .agent/subagents/ 目录，自动发现并注册所有子智能体配置。
+     * 扫描 .meshy/agents/ 目录，自动发现并注册所有子智能体配置。
      */
     public scan(): void {
         if (!fs.existsSync(this.agentsDir)) return;
