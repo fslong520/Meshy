@@ -8,6 +8,8 @@
 import { z } from 'zod';
 import { defineTool } from './define.js';
 import { fetch, ProxyAgent, RequestInit } from 'undici';
+import fs from 'fs';
+import path from 'path';
 
 const DEFAULT_MAX_LENGTH = 500_000; // Increased to 500KB for Phase 20
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -82,10 +84,10 @@ export const WebFetchTool = defineTool('webfetch', {
                 const headResponse = await fetch(params.url, { ...fetchOptions, method: 'HEAD' });
                 if (headResponse.ok) {
                     const contentLength = headResponse.headers.get('content-length');
-                    if (contentLength && parseInt(contentLength, 10) > maxLength * 2) {
+                    if (contentLength && parseInt(contentLength, 10) > 5 * 1024 * 1024) { // Hard limit 5MB
                         clearTimeout(timer);
                         return {
-                            output: `Error: The file is extremely large (${contentLength} bytes) and exceeds the safety limit of ${maxLength * 2} bytes.`,
+                            output: `Error: The file is extremely large (${contentLength} bytes) and exceeds the hard limit of 5MB.`,
                             metadata: { status: headResponse.status, contentLength }
                         };
                     }
@@ -109,23 +111,33 @@ export const WebFetchTool = defineTool('webfetch', {
             const contentType = response.headers.get('content-type') || '';
             const rawBody = await response.text();
 
-            // JSON 直接返回
-            if (contentType.includes('application/json')) {
-                const truncated = rawBody.length > maxLength
-                    ? rawBody.slice(0, maxLength) + '\n\n... (truncated)'
-                    : rawBody;
-                return { output: truncated, metadata: { contentType, length: rawBody.length } };
+            let finalContent = rawBody;
+            if (contentType.includes('text/html')) {
+                finalContent = htmlToText(rawBody);
             }
 
-            // HTML 转文本
-            const text = contentType.includes('text/html') ? htmlToText(rawBody) : rawBody;
-            const truncated = text.length > maxLength
-                ? text.slice(0, maxLength) + '\n\n... (truncated)'
-                : text;
+            // 如果内容较短，直接返回
+            if (finalContent.length <= maxLength) {
+                return {
+                    output: finalContent,
+                    metadata: { contentType, length: finalContent.length, truncated: false },
+                };
+            }
+
+            // 3. 内容过长，写入临时文件并引导大模型读取
+            const tmpDir = path.join(process.cwd(), '.meshy', 'tmp');
+            fs.mkdirSync(tmpDir, { recursive: true });
+            const filename = `webfetch-${Date.now()}.txt`;
+            const tmpFilePath = path.join(tmpDir, filename);
+
+            fs.writeFileSync(tmpFilePath, finalContent, 'utf-8');
+
+            const preamble = finalContent.slice(0, maxLength);
+            const promptSuffix = `\n\n...[CONTENT TRUNCATED]...\nThe full content (${finalContent.length} chars) is too large to fit in this response and has been saved to:\n${tmpFilePath}\n\nPlease use the 'read_file' or 'grep_search' tool to read the remaining sections of this file if needed.`;
 
             return {
-                output: truncated,
-                metadata: { contentType, length: text.length, truncated: text.length > maxLength },
+                output: preamble + promptSuffix,
+                metadata: { contentType, length: finalContent.length, truncated: true, savedTo: tmpFilePath },
             };
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);

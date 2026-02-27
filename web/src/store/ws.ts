@@ -27,6 +27,7 @@ export interface ToolCallInfo {
     args: string;
     result?: string;
     status: 'running' | 'done' | 'error';
+    approvalReason?: string;
 }
 
 export interface ApprovalInfo {

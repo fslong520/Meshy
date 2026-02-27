@@ -24,6 +24,7 @@ export type ActionType = 'read_file' | 'edit_file' | 'write_file' | 'run_command
 export interface ApprovalResult {
     approved: boolean;
     reason?: string;
+    autoApproved?: boolean;
 }
 
 // ─── AskUser 回调签名 ───
@@ -221,7 +222,7 @@ export class ExecutionSandbox {
             const review = await this.reviewer.reviewAction(actionType, detail);
             if (review.approved) {
                 console.log(`[Sandbox:SMART] AI Approved. Reason: ${review.reason}`);
-                return { approved: true };
+                return { approved: true, autoApproved: true, reason: review.reason };
             } else {
                 // 如果 AI 拒绝，退回到人类确认
                 console.warn(`[Sandbox:SMART] AI Rejected. Reason: ${review.reason}`);

@@ -437,70 +437,122 @@ body {
   font-size: 12.5px;
 }
 
-/* ─── Tool Call Card ─── */
-.tool-call-card {
-  margin: 10px 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  animation: fadeIn 0.2s ease;
-}
-
-.tool-call-header {
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
+/* ─── Tool Call UI (Inline & Block) ─── */
+.tool-inline {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
+  padding: 6px 0 6px 12px;
+  margin: 6px 0;
+  border-left: 2px solid var(--info);
+  background: rgba(96, 165, 250, 0.05);
+  font-family: var(--font-mono);
   font-size: 13px;
-  transition: background var(--transition-fast);
-}
-
-.tool-call-header:hover {
-  background: var(--bg-elevated);
-}
-
-.tool-call-header .tool-name {
-  font-weight: 600;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.tool-call-header .tool-status {
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  margin-left: auto;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.tool-status.running {
-  background: rgba(96, 165, 250, 0.15);
-  color: var(--info);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.tool-status.done {
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-
-.tool-status.error {
-  background: rgba(248, 113, 113, 0.15);
-  color: var(--error);
-}
-
-.tool-call-body {
-  padding: 10px 12px;
-  font-size: 12px;
-  font-family: var(--font-mono);
   color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-  max-height: 200px;
+  flex-wrap: wrap;
+}
+
+.tool-inline.pulse {
+  animation: pulseOpacity 1.5s ease-in-out infinite;
+}
+
+.tool-inline .tool-name {
+  color: var(--info);
+  font-weight: 600;
+}
+
+.tool-inline .tool-args {
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.tool-block {
+  margin: 10px 0;
+  border-left: 2px solid var(--border);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.tool-block:hover {
+  background: var(--bg-tertiary);
+}
+
+.tool-block.error {
+  border-left-color: var(--error);
+}
+
+.tool-block.done {
+  border-left-color: var(--accent);
+}
+
+.tool-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.tool-block-header .tool-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tool-block-header .tool-expander {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.tool-block-body {
+  padding: 10px 12px;
+  border-top: 1px dotted var(--border-subtle);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-height: 250px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.15);
+}
+
+.tool-block-body .arg-box,
+.tool-block-body .result-box {
+  margin-bottom: 6px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.tool-approval-notice {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  padding: 4px 8px;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  width: 100%;
+}
+
+@keyframes pulseOpacity {
+  0% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.6;
+  }
 }
 
 /* ─── Approval Card ─── */

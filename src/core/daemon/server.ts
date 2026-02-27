@@ -63,6 +63,7 @@ export type DaemonEventType =
     | 'agent:tool_result'     // 工具执行结果
     | 'agent:done'            // 任务完成
     | 'agent:error'           // 错误
+    | 'agent:approve'         // Agent 请求审批
     | 'approval:request'      // 沙盒审批请求（等待人类确认）
     | 'session:update'        // Session 状态变更
     | 'workspace:list'        // 工作区列表

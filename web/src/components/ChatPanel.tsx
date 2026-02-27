@@ -123,21 +123,45 @@ export function ChatPanel({ messages, onApproval }: Props) {
                                 </ReactMarkdown>
                             )}
 
-                            {/* Tool Call 卡片 */}
+                            {/* Tool Call卡片 - Inline/Block 风格 */}
                             {msg.toolCalls?.map((tc, j) => {
                                 const key = `${msg.id}-tool-${j}`
+                                const isRunning = tc.status === 'running'
+                                const isError = tc.status === 'error'
+
+                                // Auto Approve 提示 (inline, muted)
+                                const approvalNotice = tc.approvalReason && (
+                                    <div className="tool-approval-notice">
+                                        <span className="icon">🛡️</span> [AI Approved] {tc.approvalReason}
+                                    </div>
+                                )
+
+                                // Inline 模式 (Running)
+                                if (isRunning) {
+                                    return (
+                                        <div key={key} className="tool-inline pulse">
+                                            {approvalNotice}
+                                            <span className="icon">⚙</span>
+                                            <span className="tool-name">[Running] {tc.name}</span>
+                                            <span className="tool-args">{tc.args.length > 50 ? tc.args.slice(0, 50) + '...' : tc.args}</span>
+                                        </div>
+                                    )
+                                }
+
+                                // Block 模式 (Done / Error)
                                 const expanded = expandedTools.has(key)
                                 return (
-                                    <div className="tool-call-card" key={key}>
-                                        <div className="tool-call-header" onClick={() => toggleTool(key)}>
-                                            <span>{expanded ? '▼' : '▶'}</span>
-                                            <span className="tool-name">{tc.name}</span>
-                                            <span className={`tool-status ${tc.status}`}>{tc.status}</span>
+                                    <div key={key} className={`tool-block ${tc.status}`} onClick={() => toggleTool(key)}>
+                                        {approvalNotice}
+                                        <div className="tool-block-header">
+                                            <span className="icon">{isError ? '⚠️' : '✓'}</span>
+                                            <span className="tool-title"># {tc.name} {isError ? '(Failed)' : '(Success)'}</span>
+                                            <span className="tool-expander">{expanded ? '▼' : '▶'}</span>
                                         </div>
                                         {expanded && (
-                                            <div className="tool-call-body">
-                                                <div><strong>Args:</strong> {tc.args}</div>
-                                                {tc.result && <div style={{ marginTop: 6 }}><strong>Result:</strong> {tc.result}</div>}
+                                            <div className="tool-block-body" onClick={(e) => e.stopPropagation()}>
+                                                <div className="arg-box"><strong>Input:</strong> {tc.args}</div>
+                                                {tc.result && <div className="result-box"><strong>Output:</strong> {tc.result}</div>}
                                             </div>
                                         )}
                                     </div>

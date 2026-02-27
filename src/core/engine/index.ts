@@ -938,6 +938,11 @@ export class TaskEngine {
             return `Action denied by sandbox: ${reason}`;
         }
 
+        // Broadcast if it was auto-approved by AI
+        if (approval.autoApproved && this.daemon) {
+            this.daemon.broadcast('agent:approve', { tool: name, reason: approval.reason || 'AI Secondary Reviewer approved automatically.' });
+        }
+
         try {
             if (name.startsWith('mcp:')) {
                 return await this.workspace.mcpHost.callTool(name, args);
