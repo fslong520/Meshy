@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { sendRpc } from '../store/ws'
 
 type TabName = 'skills' | 'mcp' | 'soul' | 'plugins' | 'messaging';
 
@@ -10,7 +11,7 @@ const TABS: { key: TabName; label: string }[] = [
     { key: 'messaging', label: 'Msg' },
 ]
 
-export function RightPanel() {
+export function RightPanel({ connected }: { connected: boolean }) {
     const [activeTab, setActiveTab] = useState<TabName>('skills')
 
     return (
@@ -30,9 +31,9 @@ export function RightPanel() {
 
             {/* Tab Content */}
             <div className="right-tab-content">
-                {activeTab === 'skills' && <SkillsTab />}
-                {activeTab === 'mcp' && <McpTab />}
-                {activeTab === 'soul' && <SoulTab />}
+                {activeTab === 'skills' && <SkillsTab connected={connected} />}
+                {activeTab === 'mcp' && <McpTab connected={connected} />}
+                {activeTab === 'soul' && <SoulTab connected={connected} />}
                 {activeTab === 'plugins' && <PlaceholderTab title="Plugins" />}
                 {activeTab === 'messaging' && <PlaceholderTab title="Messaging" />}
             </div>
@@ -41,23 +42,25 @@ export function RightPanel() {
 }
 
 // ─── Skills Tab ───
-function SkillsTab() {
+function SkillsTab({ connected }: { connected: boolean }) {
+    const [skills, setSkills] = useState<{ name: string, status: string, desc: string }[]>([])
+
+    useEffect(() => {
+        if (!connected) return
+        sendRpc<{ skills: typeof skills }>('skill:list').then(res => setSkills(res?.skills || []))
+    }, [connected])
+
     return (
         <div>
-            <div className="list-item">
-                <div className="list-item-title">code-review</div>
-                <div className="list-item-desc">Review code with best practices</div>
-                <span className="list-item-status" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                    Active
-                </span>
-            </div>
-            <div className="list-item">
-                <div className="list-item-title">deep-research</div>
-                <div className="list-item-desc">Multi-step web research agent</div>
-                <span className="list-item-status" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                    Active
-                </span>
-            </div>
+            {skills.map(s => (
+                <div className="list-item" key={s.name}>
+                    <div className="list-item-title">{s.name}</div>
+                    <div className="list-item-desc">{s.desc}</div>
+                    <span className="list-item-status" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+                        {s.status}
+                    </span>
+                </div>
+            ))}
             <div style={{ textAlign: 'center', marginTop: 12 }}>
                 <button
                     style={{
@@ -78,19 +81,28 @@ function SkillsTab() {
 }
 
 // ─── MCP Tab ───
-function McpTab() {
+function McpTab({ connected }: { connected: boolean }) {
+    const [servers, setServers] = useState<{ name: string, status: string, desc: string }[]>([])
+
+    useEffect(() => {
+        if (!connected) return
+        sendRpc<{ servers: typeof servers }>('mcp:list').then(res => setServers(res?.servers || []))
+    }, [connected])
+
     return (
         <div>
-            <div className="list-item">
-                <div className="list-item-title">filesystem</div>
-                <div className="list-item-desc">Local file operations</div>
-                <span
-                    className="list-item-status"
-                    style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}
-                >
-                    Connected
-                </span>
-            </div>
+            {servers.map(s => (
+                <div className="list-item" key={s.name}>
+                    <div className="list-item-title">{s.name}</div>
+                    <div className="list-item-desc">{s.desc}</div>
+                    <span
+                        className="list-item-status"
+                        style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}
+                    >
+                        {s.status}
+                    </span>
+                </div>
+            ))}
             <div style={{ textAlign: 'center', marginTop: 12 }}>
                 <button
                     style={{
@@ -111,30 +123,31 @@ function McpTab() {
 }
 
 // ─── SOUL Tab ───
-function SoulTab() {
+function SoulTab({ connected }: { connected: boolean }) {
+    const [rituals, setRituals] = useState<{ name: string, status: string, desc: string }[]>([])
+
+    useEffect(() => {
+        if (!connected) return
+        sendRpc<{ rituals: typeof rituals }>('ritual:status').then(res => setRituals(res?.rituals || []))
+    }, [connected])
+
+    const getStatusStyle = (status: string) => {
+        if (status === 'Loaded') return { background: 'var(--accent-dim)', color: 'var(--accent)' }
+        if (status === 'Pending') return { background: 'rgba(251,191,36,0.15)', color: 'var(--warning)' }
+        return { background: 'rgba(248,113,113,0.15)', color: 'var(--error)' }
+    }
+
     return (
         <div>
-            <div className="list-item">
-                <div className="list-item-title">SOUL.md</div>
-                <div className="list-item-desc">Agent identity and behavioral rules</div>
-                <span className="list-item-status" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                    Loaded
-                </span>
-            </div>
-            <div className="list-item">
-                <div className="list-item-title">HEARTBEAT.md</div>
-                <div className="list-item-desc">Self-verification ritual checkpoint</div>
-                <span className="list-item-status" style={{ background: 'rgba(251,191,36,0.15)', color: 'var(--warning)' }}>
-                    Pending
-                </span>
-            </div>
-            <div className="list-item">
-                <div className="list-item-title">BOOTSTRAP.md</div>
-                <div className="list-item-desc">Session initialization script</div>
-                <span className="list-item-status" style={{ background: 'rgba(248,113,113,0.15)', color: 'var(--error)' }}>
-                    Not Found
-                </span>
-            </div>
+            {rituals.map(r => (
+                <div className="list-item" key={r.name}>
+                    <div className="list-item-title">{r.name}</div>
+                    <div className="list-item-desc">{r.desc}</div>
+                    <span className="list-item-status" style={getStatusStyle(r.status)}>
+                        {r.status}
+                    </span>
+                </div>
+            ))}
         </div>
     )
 }

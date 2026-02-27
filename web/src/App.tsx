@@ -108,9 +108,9 @@ function App() {
       <LeftSidebar connected={connected} />
       <div className="center-panel">
         <ChatPanel messages={messages} onApproval={handleApproval} />
-        <InputArea onSend={handleSend} disabled={agentStreaming} />
+        <InputArea onSend={handleSend} disabled={agentStreaming} connected={connected} />
       </div>
-      <RightPanel />
+      <RightPanel connected={connected} />
 
       {/* Blackboard 浮动按钮 */}
       <button className="bb-toggle" onClick={() => setBbOpen(!bbOpen)}>

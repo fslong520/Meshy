@@ -1,19 +1,40 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Send } from 'lucide-react'
+import { sendRpc } from '../store/ws'
 
 interface Props {
     onSend: (text: string) => void;
     disabled?: boolean;
+    connected: boolean;
 }
 
-export function InputArea({ onSend, disabled }: Props) {
+export function InputArea({ onSend, disabled, connected }: Props) {
     const [text, setText] = useState('')
     const [mode, setMode] = useState<'plan' | 'build'>('build')
+    const [models, setModels] = useState<string[]>([])
+    const [activeModel, setActiveModel] = useState<string>('')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+    useEffect(() => {
+        if (!connected) return
+        sendRpc<{ providers: string[], defaultModel: string }>('model:list').then((res) => {
+            if (res) {
+                setModels(res.providers)
+                setActiveModel(res.defaultModel)
+            }
+        })
+    }, [connected])
+
+    const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const newModel = e.target.value;
+        setActiveModel(newModel)
+        sendRpc('model:switch', { model: newModel })
+    }
 
     const handleSend = useCallback(() => {
         if (!text.trim() || disabled) return
-        onSend(text.trim())
+        const finalPrompt = mode === 'plan' ? `/plan ${text.trim()}` : text.trim()
+        onSend(finalPrompt)
         setText('')
         // 重置高度
         if (textareaRef.current) textareaRef.current.style.height = '44px'
@@ -42,8 +63,9 @@ export function InputArea({ onSend, disabled }: Props) {
                     <Paperclip size={14} /> Attach
                 </button>
 
-                <select title="Select model">
-                    <option>🤖 Default Model</option>
+                <select title="Select model" value={activeModel} onChange={handleModelChange}>
+                    {models.includes(activeModel) ? null : <option value={activeModel}>{activeModel}</option>}
+                    {models.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
 
                 <select title="Select agent">

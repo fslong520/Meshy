@@ -48,10 +48,12 @@ function resolvePublicDir(): string {
 export interface RpcMessage {
     id?: string;
     type: 'request' | 'response' | 'event';
-    method: string;
+    method?: string;
     params?: Record<string, unknown>;
     result?: unknown;
     error?: string;
+    name?: string;
+    data?: unknown;
 }
 
 // ─── 服务端事件类型 ───
@@ -61,7 +63,7 @@ export type DaemonEventType =
     | 'agent:tool_result'     // 工具执行结果
     | 'agent:done'            // 任务完成
     | 'agent:error'           // 错误
-    | 'sandbox:approval'      // 沙盒审批请求（等待人类确认）
+    | 'approval:request'      // 沙盒审批请求（等待人类确认）
     | 'session:update'        // Session 状态变更
     | 'workspace:list'        // 工作区列表
     | 'session:list'          // 会话列表
@@ -161,8 +163,8 @@ export class DaemonServer extends EventEmitter {
     public broadcast(eventType: DaemonEventType, data?: unknown): void {
         const msg: RpcMessage = {
             type: 'event',
-            method: eventType,
-            params: { data },
+            name: eventType,
+            data,
         };
 
         const payload = JSON.stringify(msg);
@@ -181,7 +183,7 @@ export class DaemonServer extends EventEmitter {
         const approvalId = `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // 广播审批请求
-        this.broadcast('sandbox:approval', { approvalId, question, context });
+        this.broadcast('approval:request', { id: approvalId, question, context });
 
         // 如果没有客户端连接，fallback 到 CLI stdin
         if (this.clients.size === 0) {
@@ -211,14 +213,44 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
-            case 'approval:respond': {
-                const approvalId = msg.params?.approvalId as string;
-                const answer = msg.params?.answer as string;
+            case 'approval:response':
+            case 'approval:respond': { // 兼容旧版本
+                const approvalId = (msg.params?.id || msg.params?.approvalId) as string;
+                let answer = msg.params?.answer as string;
+                if (msg.params?.approved !== undefined) {
+                    answer = msg.params?.approved ? 'y' : 'n';
+                }
                 const resolve = this.pendingApprovals.get(approvalId);
                 if (resolve) {
                     resolve(answer);
                     this.pendingApprovals.delete(approvalId);
                 }
+                break;
+            }
+
+            case 'model:list': {
+                this.emit('model:list', ws, msg.id);
+                break;
+            }
+
+            case 'model:switch': {
+                const modelId = msg.params?.model as string;
+                this.emit('model:switch', modelId, ws, msg.id);
+                break;
+            }
+
+            case 'skill:list': {
+                this.emit('skill:list', ws, msg.id);
+                break;
+            }
+
+            case 'mcp:list': {
+                this.emit('mcp:list', ws, msg.id);
+                break;
+            }
+
+            case 'ritual:status': {
+                this.emit('ritual:status', ws, msg.id);
                 break;
             }
 

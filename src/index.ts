@@ -261,6 +261,48 @@ export async function runServer(port: number) {
         daemon.sendResponse(ws, msgId, session.blackboard);
     });
 
+    daemon.on('model:list', (ws, msgId) => {
+        const providers = Object.keys(config.providers);
+        daemon.sendResponse(ws, msgId, { providers, defaultModel: config.models.default });
+    });
+
+    daemon.on('model:switch', (modelId: string, ws, msgId) => {
+        try {
+            providerResolver.switchModel(modelId);
+            console.log(`[Meshy] Web UI switched model to: ${modelId}`);
+            daemon.sendResponse(ws, msgId, { success: true, model: modelId });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('skill:list', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, {
+            skills: [
+                { name: 'code-review', status: 'Active', desc: 'Review code with best practices' },
+                { name: 'deep-research', status: 'Active', desc: 'Multi-step web research agent' }
+            ]
+        });
+    });
+
+    daemon.on('mcp:list', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, {
+            servers: [
+                { name: 'filesystem', status: 'Connected', desc: 'Local file operations' }
+            ]
+        });
+    });
+
+    daemon.on('ritual:status', (ws, msgId) => {
+        daemon.sendResponse(ws, msgId, {
+            rituals: [
+                { name: 'SOUL.md', status: 'Loaded', desc: 'Agent identity and behavioral rules' },
+                { name: 'HEARTBEAT.md', status: 'Pending', desc: 'Self-verification ritual checkpoint' },
+                { name: 'BOOTSTRAP.md', status: 'Not Found', desc: 'Session initialization script' }
+            ]
+        });
+    });
+
     daemon.on('capsules:list', async (ws, msgId) => {
         try {
             const capsules = await activeWorkspace.memoryStore.getRecentCapsules(20);

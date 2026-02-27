@@ -683,17 +683,18 @@ export class TaskEngine {
                     activeLLM = this.providerResolver.getProvider();
                 }
 
+                const responseMsgId = `msg-${Date.now()}`;
+
                 await activeLLM.generateResponseStream(prompt, (event) => {
                     if (event.type === 'text') {
                         fullResponseText += event.data;
                         process.stdout.write(event.data);
-                        this.daemon?.broadcast('agent:text', event.data);
+                        this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId });
                     } else if (event.type === 'tool_call_start') {
                         const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
                         pendingToolCalls.push(newCall);
                         process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
                         this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
-                        this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
                     } else if (event.type === 'tool_call_chunk') {
                         if (pendingToolCalls.length > 0) {
                             pendingToolCalls[pendingToolCalls.length - 1].rawArgs += event.data;
@@ -733,8 +734,9 @@ export class TaskEngine {
                 // 2. Execute ALL tools concurrently
                 const executionPromises = pendingToolCalls.map(async (call) => {
                     const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
+                    this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
                     const result = await this.executeTool(call.name, parsedArgs);
-                    this.daemon?.broadcast('agent:tool_result', { tool: call.name, success: true });
+                    this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
                     return { id: call.id, result };
                 });
 
