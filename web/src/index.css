@@ -209,6 +209,40 @@ body {
   margin-bottom: 8px;
 }
 
+/* 思考过程区块样式 */
+.reasoning-block {
+  margin: 8px 0;
+  padding: 10px 14px;
+  background-color: rgba(255, 255, 255, 0.03);
+  /* 微弱的深色背景 */
+  border-left: 3px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reasoning-block summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  outline: none;
+}
+
+.reasoning-block summary:hover {
+  color: var(--text-primary);
+}
+
+.reasoning-block[open] summary {
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;

@@ -118,6 +118,20 @@ function App() {
     setAgentStreaming(true)
   })
 
+  // 接收 Agent 思考过程 (DeepSeek R1)
+  useEvent('agent:reasoning', (msg: RpcMessage) => {
+    const chunk = msg.data as { text: string; id: string }
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'agent' && last.id === chunk.id) {
+        const currentReasoning = last.reasoningContent || ''
+        return [...prev.slice(0, -1), { ...last, reasoningContent: currentReasoning + chunk.text }]
+      }
+      return [...prev, { id: chunk.id, role: 'agent', content: '', reasoningContent: chunk.text, timestamp: Date.now() }]
+    })
+    setAgentStreaming(true)
+  })
+
   // Agent 完成
   useEvent('agent:done', () => {
     setAgentStreaming(false)

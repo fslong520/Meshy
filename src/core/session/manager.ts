@@ -17,6 +17,7 @@ export interface SessionSummary {
     createdAt: string;
     updatedAt: string;
     goal: string;
+    title?: string;
     messageCount: number;
 }
 
@@ -46,21 +47,30 @@ export class SessionManager {
         }
 
         const files = fs.readdirSync(this.sessionsDir)
-            .filter(f => f.endsWith('.json'));
+            .filter(f => f.endsWith('.jsonl') || f.endsWith('.json'));
 
         for (const file of files) {
             try {
                 const filePath = path.join(this.sessionsDir, file);
-                const raw = fs.readFileSync(filePath, 'utf-8');
-                const parsed = JSON.parse(raw);
+
+                // Read up to 64KB to snag the first line (metadata) efficiently
+                const fd = fs.openSync(filePath, 'r');
+                const buffer = Buffer.alloc(65536);
+                const bytesRead = fs.readSync(fd, buffer, 0, 65536, 0);
+                fs.closeSync(fd);
+
+                const content = buffer.toString('utf-8', 0, bytesRead);
+                const firstLine = content.split('\n')[0];
+                const parsed = JSON.parse(firstLine || '{}');
 
                 summaries.push({
-                    id: parsed.id || file.replace('.json', ''),
+                    id: parsed.id || file.replace(/\.jsonl?$/, ''),
                     status: parsed.status || 'active',
                     createdAt: parsed.createdAt || 'unknown',
                     updatedAt: parsed.updatedAt || 'unknown',
                     goal: parsed.blackboard?.currentGoal || '(no goal)',
-                    messageCount: parsed.history?.length || 0,
+                    title: parsed.title || '',
+                    messageCount: parsed.history?.length || 0, // In .jsonl, this will be 0 on summary, but that's fine
                 });
             } catch {
                 // Skip corrupted files silently
@@ -102,10 +112,13 @@ export class SessionManager {
      * Resume a previously suspended session by ID.
      */
     public resumeSession(sessionId: string): Session | null {
-        const filePath = path.join(this.sessionsDir, `${sessionId}.json`);
+        let filePath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
         if (!fs.existsSync(filePath)) {
-            console.warn(`[SessionManager] Session "${sessionId}" not found.`);
-            return null;
+            filePath = path.join(this.sessionsDir, `${sessionId}.json`);
+            if (!fs.existsSync(filePath)) {
+                console.warn(`[SessionManager] Session "${sessionId}" not found.`);
+                return null;
+            }
         }
 
         try {

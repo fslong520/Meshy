@@ -213,7 +213,14 @@ export async function runServer(port: number) {
     const workspaceManager = new WorkspaceManager(providerResolver);
     const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
     const sessionManager = new SessionManager(activeWorkspace.rootPath);
-    let session = sessionManager.createSession();
+
+    let session: import('./core/session/state.js').Session;
+    const summaries = sessionManager.listSessions();
+    if (summaries.length > 0) {
+        session = sessionManager.loadSession(summaries[0].id) || sessionManager.createSession();
+    } else {
+        session = sessionManager.createSession();
+    }
 
     // 启动 Daemon Server
     const daemon = new DaemonServer(port);
@@ -235,6 +242,11 @@ export async function runServer(port: number) {
         }
     });
 
+    daemon.on('session:interrupt', () => {
+        console.log(`\n[Meshy] Web UI requested session interrupt.`);
+        engine.interrupt();
+    });
+
     daemon.on('workspace:list', (ws, msgId) => {
         daemon.sendResponse(ws, msgId, {
             workspaces: workspaceManager.listWorkspaces()
@@ -250,6 +262,11 @@ export async function runServer(port: number) {
     daemon.on('session:create', (ws: import('ws').WebSocket, msgId: string) => {
         const newSession = sessionManager.createSession();
         console.log(`[Meshy] Web UI created new session: ${newSession.id}`);
+
+        // Fix: Explicitly update the global session state and task engine
+        session = newSession;
+        engine.setSession(newSession);
+
         daemon.sendResponse(ws, msgId, {
             sessionId: newSession.id,
             sessions: sessionManager.listSessions(),

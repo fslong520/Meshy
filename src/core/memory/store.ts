@@ -106,8 +106,20 @@ export class MemoryStore {
             sql = `INSERT INTO capsules (session_id, summary, tags, category) VALUES (?, ?, ?, ?)`;
         }
 
-        const result = await this.client.execute({ sql, args });
-        return Number(result.lastInsertRowid);
+        try {
+            const result = await this.client.execute({ sql, args });
+            return Number(result.lastInsertRowid);
+        } catch (err: any) {
+            if (sql.includes('vector(?)')) {
+                console.warn('[MemoryStore] Failed to insert vector embedding (likely dimension mismatch), retrying without embedding. Error:', err.message);
+                // Remove the last argument, which is the embedding payload
+                args.pop();
+                const fallbackSql = `INSERT INTO capsules (session_id, summary, tags, category) VALUES (?, ?, ?, ?)`;
+                const result = await this.client.execute({ sql: fallbackSql, args });
+                return Number(result.lastInsertRowid);
+            }
+            throw err;
+        }
     }
 
     /**

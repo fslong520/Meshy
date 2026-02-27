@@ -19,7 +19,8 @@ export class OpenAIAdapter implements ILLMProvider {
 
     async generateResponseStream(
         prompt: StandardPrompt,
-        onEvent: (event: AgentMessageEvent) => void
+        onEvent: (event: AgentMessageEvent) => void,
+        abortSignal?: AbortSignal
     ): Promise<void> {
         const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
@@ -31,10 +32,16 @@ export class OpenAIAdapter implements ILLMProvider {
             if (typeof msg.content === 'string') {
                 if (msg.role === 'system') {
                     messages.push({ role: 'system', content: msg.content });
-                } else if (msg.role === 'assistant') {
-                    messages.push({ role: 'assistant', content: msg.content });
                 } else {
-                    messages.push({ role: 'user', content: msg.content });
+                    const param: any = {
+                        role: msg.role === 'assistant' ? 'assistant' : 'user',
+                        content: msg.content
+                    };
+                    // If it's an assistant message with previous reasoning, pass it back for context
+                    if (msg.role === 'assistant' && (msg as any).reasoningContent) {
+                        param.reasoning_content = (msg as any).reasoningContent;
+                    }
+                    messages.push(param);
                 }
             } else if (msg.content.type === 'tool_call') {
                 messages.push({
@@ -73,13 +80,19 @@ export class OpenAIAdapter implements ILLMProvider {
                 messages,
                 tools: tools.length > 0 ? tools : undefined,
                 stream: true,
-            });
+            }, { signal: abortSignal });
 
             let currentToolCallId: string | undefined;
 
             for await (const chunk of stream) {
                 const choice = chunk.choices[0];
                 if (!choice) continue;
+
+                // Support for DeepSeek's reasoning_content
+                const delta = choice.delta as any;
+                if (delta.reasoning_content) {
+                    onEvent({ type: 'reasoning_chunk', data: delta.reasoning_content });
+                }
 
                 if (choice.delta.content) {
                     onEvent({ type: 'text', data: choice.delta.content });

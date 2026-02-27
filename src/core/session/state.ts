@@ -15,6 +15,7 @@ export interface BlockboardState {
 
 export class Session {
     public id: string;
+    public title?: string;
     public history: StandardMessage[];
     public blackboard: BlockboardState;
     public createdAt: string;
@@ -117,24 +118,69 @@ export class Session {
     }
 
     public serialize(): string {
-        return JSON.stringify({
+        const baseState = {
             id: this.id,
-            history: this.history,
+            title: this.title,
             blackboard: this.blackboard,
             createdAt: this.createdAt,
             updatedAt: this.updatedAt,
             status: this.status,
-        });
+        };
+
+        let result = JSON.stringify(baseState) + '\n';
+        for (const msg of this.history) {
+            result += JSON.stringify({ type: 'message', message: msg }) + '\n';
+        }
+        return result;
     }
 
     public static deserialize(data: string): Session {
-        const parsed = JSON.parse(data);
-        const session = new Session(parsed.id);
-        session.history = parsed.history || [];
-        session.blackboard = parsed.blackboard;
-        if (parsed.createdAt) session.createdAt = parsed.createdAt;
-        if (parsed.updatedAt) session.updatedAt = parsed.updatedAt;
-        if (parsed.status) session.status = parsed.status;
+        const lines = data.split('\n').filter(l => l.trim().length > 0);
+        let parsedMeta: any = {};
+
+        try {
+            // First line or whole json
+            parsedMeta = JSON.parse(lines[0] || '{}');
+
+            // Backwards compatibility with standard JSON
+            if (lines.length === 1 && parsedMeta.history !== undefined) {
+                const session = new Session(parsedMeta.id);
+                if (parsedMeta.title) session.title = parsedMeta.title;
+                session.history = parsedMeta.history || [];
+                session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
+                if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
+                if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
+                if (parsedMeta.status) session.status = parsedMeta.status;
+                return session;
+            }
+        } catch (e) {
+            console.warn('[Session] Failed to parse meta line', e);
+        }
+
+        const session = new Session(parsedMeta.id || `session-${Date.now()}`);
+        if (parsedMeta.title) session.title = parsedMeta.title;
+        session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
+        if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
+        if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
+        if (parsedMeta.status) session.status = parsedMeta.status;
+
+        // Replay events
+        for (let i = 1; i < lines.length; i++) {
+            try {
+                const row = JSON.parse(lines[i]);
+                if (row.type === 'message' && row.message) {
+                    session.history.push(row.message);
+                } else if (row.type === 'state_update') {
+                    if (row.blackboard) session.blackboard = row.blackboard;
+                    if (row.status) session.status = row.status;
+                    if (row.updatedAt) session.updatedAt = row.updatedAt;
+                    if (row.title) session.title = row.title;
+                }
+            } catch (e) {
+                // skip corrupted lines
+            }
+        }
+
         return session;
     }
 }

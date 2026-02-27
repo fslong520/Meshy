@@ -117,10 +117,6 @@ export class ProviderResolver {
     // 缓存拉取到的可用模型列表
     private cachedModels: Record<string, { protocol: string, models: string[] }> | null = null;
 
-    /**
-     * 获取所有可用的模型（按 Provider 分组），支持异步动态获取。
-     * 当 API 获取失败时，从 config 中提取已配置的模型 ID 作为兜底。
-     */
     public async listModelsAsync(): Promise<Record<string, { protocol: string, models: string[] }>> {
         if (this.cachedModels) {
             return this.cachedModels;
@@ -133,18 +129,21 @@ export class ProviderResolver {
         for (const [name, cfg] of Object.entries(this.config.providers)) {
             let models: string[] = [];
 
-            try {
-                const provider = this.resolveInstance(name, cfg, 'dummy-model-for-list');
-                if (provider.listModelsAsync) {
-                    models = await provider.listModelsAsync();
-                }
-            } catch (e) {
-                console.warn(`[ProviderResolver] Failed to list models for provider ${name}:`, e instanceof Error ? e.message : e);
-            }
-
-            // 如果动态获取失败或为空，使用 config 中配置的模型作为 fallback
-            if (models.length === 0 && configModelsByProvider[name]) {
+            // 优化：如果 config 中已经指定了该 provider 的模型（例如在 default/fallback/small 中明确写出），
+            // 直接采用作为初始列表，完全砍掉对 /v1/models 的网络拉取。
+            // 适用于大部分中转商（如 Zeabur/DeepSeek），用户通常已经在 config 配置了首选模型。
+            if (configModelsByProvider[name] && configModelsByProvider[name].length > 0) {
                 models = [...configModelsByProvider[name]];
+            } else {
+                // 仅当配置中没有任何该 provider 的线索时，才尝试动态拉取
+                try {
+                    const provider = this.resolveInstance(name, cfg, 'dummy-model-for-list');
+                    if (provider.listModelsAsync) {
+                        models = await provider.listModelsAsync();
+                    }
+                } catch (e) {
+                    console.warn(`[ProviderResolver] Failed to list models for provider ${name}:`, e instanceof Error ? e.message : e);
+                }
             }
 
             // 确保当前活跃的 default model 也在列表中

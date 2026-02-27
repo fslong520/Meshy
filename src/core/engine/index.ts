@@ -78,6 +78,7 @@ export class TaskEngine {
 
     // Phase 14: Compaction Agent
     private compactionAgent: CompactionAgent;
+    private abortController: AbortController | null = null;
 
     // Phase 15: Custom Commands
     private customCommands: CustomCommandRegistry;
@@ -156,6 +157,11 @@ export class TaskEngine {
             sessionId: session.id,
         });
         console.log(`[Engine] Switched active context to session: ${session.id}`);
+    }
+
+    private addMessageAndAppend(msg: any): void {
+        this.session.addMessage(msg);
+        this.workspace.snapshotManager.appendMessage(this.session, msg);
     }
 
     private defaultAskUser(question: string): Promise<string> {
@@ -349,12 +355,12 @@ export class TaskEngine {
                             for (const [stepId, state] of results.entries()) {
                                 report += `\n--- Step: ${stepId} [${state.status}] ---\n${state.output}\n`;
                             }
-                            this.session.addMessage({ role: 'assistant', content: report });
+                            this.addMessageAndAppend({ role: 'assistant', content: report });
                             this.daemon?.broadcast('agent:text', report);
                         } catch (err: unknown) {
                             const msg = err instanceof Error ? err.message : String(err);
                             console.error(`\n[Workflow] Pipeline failed: ${msg}`);
-                            this.session.addMessage({ role: 'assistant', content: `Workflow execution failed: ${msg}` });
+                            this.addMessageAndAppend({ role: 'assistant', content: `Workflow execution failed: ${msg}` });
                         }
                         break;
                     }
@@ -377,7 +383,7 @@ export class TaskEngine {
                         : command.type === 'plan'
                             ? 'PLAN-ONLY mode: Output a structured task breakdown. Do NOT modify any files.'
                             : `Mode: ${command.type}`;
-                    this.session.addMessage({ role: 'user', content: command.args });
+                    this.addMessageAndAppend({ role: 'user', content: command.args });
 
                     const decision = await this.router.classify(command.args);
                     const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
@@ -471,8 +477,15 @@ export class TaskEngine {
                     const cmdConfig = this.customCommands.getCommand(cmdName)!;
                     this.logger.engine(`Executing custom command: /${cmdName}`, { args: cmdArgs });
 
+                    if (!this.session.title && this.session.history.length === 0) {
+                        const trimmed = renderedPrompt.trimStart();
+                        if (trimmed) {
+                            this.session.title = trimmed.length > 40 ? trimmed.substring(0, 40) + '...' : trimmed;
+                        }
+                    }
+
                     // 将渲染后的 prompt 作为用户消息注入
-                    this.session.addMessage({ role: 'user', content: renderedPrompt });
+                    this.addMessageAndAppend({ role: 'user', content: renderedPrompt });
 
                     // 使用命令绑定的模型或默认模型
                     const decision = await this.router.classify(renderedPrompt);
@@ -496,7 +509,14 @@ export class TaskEngine {
             }
         }
 
-        this.session.addMessage({ role: 'user', content: userPrompt });
+        if (!this.session.title && this.session.history.length === 0) {
+            const trimmed = userPrompt.trimStart();
+            if (trimmed) {
+                this.session.title = trimmed.length > 40 ? trimmed.substring(0, 40) + '...' : trimmed;
+            }
+        }
+
+        this.addMessageAndAppend({ role: 'user', content: userPrompt });
 
         // ── Phase 2: 意图路由（使用清洗后的文本） ──
         const decision = await this.router.classify(parsed.cleanText);
@@ -522,7 +542,8 @@ export class TaskEngine {
 
         const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
             .withRepoMap(this.workspace.getRepoMap())
-            .withRoutingHint(decision.systemPromptHint);
+            .withRoutingHint(decision.systemPromptHint)
+            .withEnvironmentContext(process.platform, this.workspace.rootPath);
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
         if (catalogAdvert || mcpAdvert) {
@@ -597,7 +618,7 @@ export class TaskEngine {
                 });
 
                 // Orchestrator 收集汇报
-                this.session.addMessage({ role: 'assistant', content: `[Worker @${agentConfig.name} Report]\n${report}` });
+                this.addMessageAndAppend({ role: 'assistant', content: `[Worker @${agentConfig.name} Report]\n${report}` });
                 this.daemon?.broadcast('agent:text', { text: `\n[Worker @${agentConfig.name} Report]\n${report}\n`, id: `worker-${Date.now()}` });
 
                 this.daemon?.broadcast('agent:done', {});
@@ -613,6 +634,19 @@ export class TaskEngine {
         await this.runLLMLoop(injection);
 
         // Execution finished successfully, history is preserved in the ongoing session.
+    }
+
+    /**
+     * 中断当前的 LLM 任务执行。
+     */
+    public interrupt(): void {
+        if (this.abortController) {
+            this.abortController.abort();
+            this.abortController = null;
+            this.logger.engine('Task interrupted by user.');
+            this.addMessageAndAppend({ role: 'system', content: 'Task interrupted by user via stop button.' });
+            this.daemon?.broadcast('agent:done', {});
+        }
     }
 
     /**
@@ -636,7 +670,8 @@ export class TaskEngine {
 
         const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
             .withRoutingHint('CRITICAL: The previous execution of this session was abruptly interrupted. Review your history context carefully and pick up exactly where you left off.')
-            .withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+            .withCatalogAdvert((catalogAdvert + mcpAdvert).trim())
+            .withEnvironmentContext(process.platform, this.workspace.rootPath);
 
         // Phase 19: User Profile (长记忆潜意识) 注入
         const userProfile = await this.workspace.memoryStore.getUserProfile();
@@ -697,6 +732,8 @@ export class TaskEngine {
 
                 const responseMsgId = `msg-${Date.now()}`;
 
+                this.abortController = new AbortController();
+
                 await activeLLM.generateResponseStream(prompt, (event) => {
                     if (event.type === 'text') {
                         fullResponseText += event.data;
@@ -723,7 +760,7 @@ export class TaskEngine {
                 });
 
                 if (pendingToolCalls.length === 0) {
-                    this.session.addMessage({ role: 'assistant', content: fullResponseText });
+                    this.addMessageAndAppend({ role: 'assistant', content: fullResponseText });
                     isDone = true;
                     break;
                 }
@@ -733,7 +770,7 @@ export class TaskEngine {
                 // 1. Add ALL tool_call messages to history first
                 for (const call of pendingToolCalls) {
                     const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
-                    this.session.addMessage({
+                    this.addMessageAndAppend({
                         role: 'assistant',
                         content: {
                             type: 'tool_call',
@@ -745,7 +782,7 @@ export class TaskEngine {
                 }
 
                 // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
-                this.workspace.snapshotManager.snapshot(this.session);
+                this.workspace.snapshotManager.appendStateUpdate(this.session);
 
                 // 2. Execute ALL tools concurrently
                 const executionPromises = pendingToolCalls.map(async (call) => {
@@ -760,7 +797,7 @@ export class TaskEngine {
 
                 // 3. Add ALL tool_result messages to history in order
                 for (const { id, result } of results) {
-                    this.session.addMessage({
+                    this.addMessageAndAppend({
                         role: 'user',
                         content: {
                             type: 'tool_result',
@@ -771,14 +808,14 @@ export class TaskEngine {
                 }
 
                 // Phase 5: 响应也写入快照
-                this.workspace.snapshotManager.snapshot(this.session);
+                this.workspace.snapshotManager.appendStateUpdate(this.session);
 
             } catch (err: unknown) {
                 retries++;
                 const message = err instanceof Error ? err.message : String(err);
                 this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
                 console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
-                this.session.addMessage({
+                this.addMessageAndAppend({
                     role: 'user',
                     content: `System Error: ${message}. Please self-correct or ask the user for help.`,
                 });
@@ -792,6 +829,8 @@ export class TaskEngine {
                         this.logger.error('ENGINE', `Forced compaction failed during retry loop: ${e}`);
                     }
                 }
+            } finally {
+                this.abortController = null;
             }
         }
 
@@ -817,6 +856,21 @@ export class TaskEngine {
         const aci = this.aci;
         const lsp = this.workspace.lspManager;
         const daemon = this.daemon;
+
+        this.toolRegistry.register(defineTool('listSkills', {
+            description: 'List all available skills configured in the workspace (.agent/skills). Returns summary info about what skills can do, without showing full prompt bodies to save tokens.',
+            parameters: z.object({}),
+            async execute() {
+                const skills = self.skillRegistry.listSkills();
+                const result = skills.map(s => ({
+                    name: s.name,
+                    description: s.description,
+                    keywords: s.keywords,
+                    tools: s.tools?.map(t => t.name)
+                }));
+                return { output: JSON.stringify(result, null, 2) };
+            },
+        }));
 
         this.toolRegistry.register(defineTool('readFile', {
             description: 'Read file contents with line numbers. Supports pagination via startLine/maxLines.',

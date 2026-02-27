@@ -26,7 +26,8 @@ export class AnthropicAdapter implements ILLMProvider {
 
     async generateResponseStream(
         prompt: StandardPrompt,
-        onEvent: (event: AgentMessageEvent) => void
+        onEvent: (event: AgentMessageEvent) => void,
+        abortSignal?: AbortSignal
     ): Promise<void> {
         const messages: Anthropic.MessageParam[] = [];
 
@@ -82,7 +83,7 @@ export class AnthropicAdapter implements ILLMProvider {
                 messages,
                 tools: tools.length > 0 ? tools : undefined,
                 stream: true,
-            });
+            }, { signal: abortSignal });
 
             for await (const chunk of stream) {
                 if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {

@@ -18,6 +18,7 @@ export interface ChatMessage {
     role: 'user' | 'agent';
     content: string;
     timestamp: number;
+    reasoningContent?: string;
     toolCalls?: ToolCallInfo[];
     approval?: ApprovalInfo;
 }

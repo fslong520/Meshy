@@ -7,6 +7,7 @@ export interface StandardTool {
 export interface StandardMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | StandardToolCall | StandardToolResult;
+    reasoningContent?: string; // Optional thinking process for models like deepseek-reasoner
 }
 
 export interface StandardToolCall {
@@ -23,7 +24,7 @@ export interface StandardToolResult {
 }
 
 export interface AgentMessageEvent {
-    type: 'text' | 'tool_call_start' | 'tool_call_chunk' | 'tool_call_end' | 'done' | 'error';
+    type: 'text' | 'tool_call_start' | 'tool_call_chunk' | 'tool_call_end' | 'done' | 'error' | 'reasoning_chunk';
     data?: any;
 }
 
@@ -40,7 +41,8 @@ export interface ILLMProvider {
      */
     generateResponseStream(
         prompt: StandardPrompt,
-        onEvent: (event: AgentMessageEvent) => void
+        onEvent: (event: AgentMessageEvent) => void,
+        abortSignal?: AbortSignal
     ): Promise<void>;
 
     /**

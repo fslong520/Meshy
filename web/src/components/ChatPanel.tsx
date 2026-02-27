@@ -116,6 +116,16 @@ export function ChatPanel({ messages, onApproval }: Props) {
 
                     return (
                         <div key={msg.id || i} className={`chat-msg ${msg.role}`}>
+                            {/* 思考过程 (DeepSeek-Reasoner) */}
+                            {msg.reasoningContent && (
+                                <details className="reasoning-block">
+                                    <summary>🤔 Thinking Process</summary>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {msg.reasoningContent}
+                                    </ReactMarkdown>
+                                </details>
+                            )}
+
                             {/* 文本内容 */}
                             {msg.content && (
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>

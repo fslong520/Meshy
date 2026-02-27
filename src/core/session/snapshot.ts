@@ -34,7 +34,7 @@ export class SnapshotManager {
     public snapshot(session: Session): void {
         try {
             const data = session.serialize();
-            const filePath = path.join(this.sessionsDir, `${session.id}.json`);
+            const filePath = path.join(this.sessionsDir, `${session.id}.jsonl`);
 
             // 写入会话数据
             fs.writeFileSync(filePath, data, 'utf-8');
@@ -43,6 +43,42 @@ export class SnapshotManager {
             fs.writeFileSync(this.latestFile, session.id, 'utf-8');
         } catch (err) {
             console.error('[SnapshotManager] Failed to snapshot session:', err);
+        }
+    }
+
+    public appendMessage(session: Session, message: any): void {
+        try {
+            const filePath = path.join(this.sessionsDir, `${session.id}.jsonl`);
+            if (!fs.existsSync(filePath)) {
+                this.snapshot(session);
+                return;
+            }
+            const line = JSON.stringify({ type: 'message', message }) + '\n';
+            fs.appendFileSync(filePath, line, 'utf-8');
+            fs.writeFileSync(this.latestFile, session.id, 'utf-8');
+        } catch (err) {
+            console.error('[SnapshotManager] Failed to append message:', err);
+        }
+    }
+
+    public appendStateUpdate(session: Session): void {
+        try {
+            const filePath = path.join(this.sessionsDir, `${session.id}.jsonl`);
+            if (!fs.existsSync(filePath)) {
+                this.snapshot(session);
+                return;
+            }
+            const line = JSON.stringify({
+                type: 'state_update',
+                blackboard: session.blackboard,
+                status: session.status,
+                updatedAt: session.updatedAt,
+                title: session.title
+            }) + '\n';
+            fs.appendFileSync(filePath, line, 'utf-8');
+            fs.writeFileSync(this.latestFile, session.id, 'utf-8');
+        } catch (err) {
+            console.error('[SnapshotManager] Failed to append state update:', err);
         }
     }
 
@@ -59,9 +95,12 @@ export class SnapshotManager {
             const latestId = fs.readFileSync(this.latestFile, 'utf-8').trim();
             if (!latestId) return null;
 
-            const filePath = path.join(this.sessionsDir, `${latestId}.json`);
+            let filePath = path.join(this.sessionsDir, `${latestId}.jsonl`);
             if (!fs.existsSync(filePath)) {
-                return null;
+                filePath = path.join(this.sessionsDir, `${latestId}.json`);
+                if (!fs.existsSync(filePath)) {
+                    return null;
+                }
             }
 
             const data = fs.readFileSync(filePath, 'utf-8');

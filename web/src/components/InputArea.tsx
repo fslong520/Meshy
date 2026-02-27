@@ -47,6 +47,10 @@ export function InputArea({ onSend, disabled, connected }: Props) {
         }
     }
 
+    const handleInterrupt = useCallback(() => {
+        sendRpc('session:interrupt', {})
+    }, [])
+
     // 自动增高
     const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setText(e.target.value)
@@ -102,9 +106,15 @@ export function InputArea({ onSend, disabled, connected }: Props) {
                     disabled={disabled}
                     rows={1}
                 />
-                <button className="send-btn" onClick={handleSend} disabled={disabled || !text.trim()}>
-                    <Send size={16} />
-                </button>
+                {disabled ? (
+                    <button className="send-btn stop-btn" onClick={handleInterrupt} title="Stop Generation">
+                        <span style={{ fontSize: '12px' }}>🛑</span>
+                    </button>
+                ) : (
+                    <button className="send-btn" onClick={handleSend} disabled={!text.trim()}>
+                        <Send size={16} />
+                    </button>
+                )}
             </div>
         </div>
     )

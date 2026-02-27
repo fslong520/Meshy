@@ -4,6 +4,7 @@ import { Settings, Plus, MessageSquare } from 'lucide-react'
 
 interface SessionInfo {
     id: string;
+    title?: string;
     status: string;
     updatedAt: string;
     goal: string;
@@ -83,12 +84,12 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
                         key={s.id}
                         className={`session-item ${activeSession === s.id ? 'active' : ''}`}
                         onClick={() => handleSwitchSession(s.id)}
-                        title={`${s.goal || s.id}\n${s.messageCount} messages • ${s.status}`}
+                        title={`${s.title || s.goal || s.id}\n${s.messageCount} messages • ${s.status}`}
                     >
                         <MessageSquare size={14} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {s.goal && s.goal !== '(no goal)' ? s.goal : s.id.slice(0, 12) + '...'}
+                                {s.title ? s.title : (s.goal && s.goal !== '(no goal)' ? s.goal : s.id.slice(0, 12) + '...')}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                                 {s.messageCount} msgs • {formatTime(s.updatedAt)}

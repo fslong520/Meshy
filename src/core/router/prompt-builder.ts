@@ -29,6 +29,7 @@ export class SystemPromptBuilder {
     private constraints: string[] = [];
     private ritualContext: string | null = null;
     private userProfile: string | null = null;
+    private environmentContext: string | null = null;
 
     constructor(basePrompt: string) {
         this.basePrompt = basePrompt;
@@ -98,6 +99,12 @@ export class SystemPromptBuilder {
         return this;
     }
 
+    /** 注入系统环境信息 (Phase 27) */
+    withEnvironmentContext(osPlatform: string, workspaceRoot: string): this {
+        this.environmentContext = `\n[Environment Context]\nOperating System: ${osPlatform}\nWorkspace Root: ${workspaceRoot}\nYou are running inside Meshy Daemon. Read files and execute local commands cautiously; do not guess syntax or assume file existence.\n`;
+        return this;
+    }
+
     /** 组装最终的 System Prompt 字符串 */
     build(): string {
         const parts: string[] = [];
@@ -115,6 +122,11 @@ export class SystemPromptBuilder {
         // 1.8 User Profile (长记忆潜意识)
         if (this.userProfile) {
             parts.push(`\n[System Constraints & User Profile]\nThe following rules are extracted from your long-term memory about the user and their preferences:\n${this.userProfile}\n`);
+        }
+
+        // 1.9 Environment Context
+        if (this.environmentContext) {
+            parts.push(this.environmentContext);
         }
 
         // 2. RepoMap
