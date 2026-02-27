@@ -25,7 +25,7 @@ import { SecurityGuard } from '../security/guard.js';
 import { ExecutionMode as SecurityExecutionMode } from '../security/modes.js';
 import { SessionManager } from '../session/manager.js';
 import { WorkflowEngine, loadWorkflows } from '../workflow/engine.js';
-import { Logger, initLogger } from '../logger/index.js';
+import { Logger, initLogger, getLogger } from '../logger/index.js';
 import { createTodoWriteTool, createTodoReadTool } from '../tool/todo.js';
 import { CompactionAgent } from '../session/compaction.js';
 import { CustomCommandRegistry } from '../commands/loader.js';
@@ -74,7 +74,7 @@ export class TaskEngine {
     private toolRegistry: ToolRegistry;
 
     // Phase 14: Structured Logger
-    public readonly logger: Logger;
+    public logger: Logger;
 
     // Phase 14: Compaction Agent
     private compactionAgent: CompactionAgent;
@@ -142,6 +142,20 @@ export class TaskEngine {
 
         // Phase 14: Compaction Agent
         this.compactionAgent = new CompactionAgent(this.providerResolver.getProvider());
+    }
+
+    /**
+     * Runtime session hot-swapping (e.g. from Web UI).
+     * Re-initializes the logger context for the new session id.
+     */
+    public setSession(session: import('../session/state.js').Session): void {
+        this.session = session;
+        this.logger = getLogger() || initLogger({
+            minLevel: 'DEBUG',
+            workspaceRoot: this.workspace.rootPath,
+            sessionId: session.id,
+        });
+        console.log(`[Engine] Switched active context to session: ${session.id}`);
     }
 
     private defaultAskUser(question: string): Promise<string> {

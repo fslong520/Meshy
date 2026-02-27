@@ -12,6 +12,7 @@ interface ReplayStep {
   role: 'system' | 'user' | 'assistant';
   type: 'text' | 'tool_call' | 'tool_result';
   summary: string;
+  raw: unknown; // Added 'raw' type
 }
 
 interface ReplayExport {
@@ -59,7 +60,7 @@ function replayToMessages(replay: ReplayExport): ChatMessage[] {
     messages.push({
       id: `replay-${step.index}`,
       role,
-      content: step.summary,
+      content: step.type === 'text' ? (step.raw as string) : step.summary,
       timestamp: Date.now(),
     })
   }

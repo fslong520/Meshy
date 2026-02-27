@@ -213,7 +213,7 @@ export async function runServer(port: number) {
     const workspaceManager = new WorkspaceManager(providerResolver);
     const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
     const sessionManager = new SessionManager(activeWorkspace.rootPath);
-    const session = sessionManager.createSession();
+    let session = sessionManager.createSession();
 
     // 启动 Daemon Server
     const daemon = new DaemonServer(port);
@@ -268,7 +268,11 @@ export async function runServer(port: number) {
     daemon.on('session:switch', async (sessionId: string, ws: import('ws').WebSocket, msgId: string) => {
         const loaded = sessionManager.loadSession(sessionId);
         if (loaded) {
-            // 返回该 session 的 replay 数据
+            // Update the global session and engine context so new messages hit the loaded session
+            session = loaded;
+            engine.setSession(loaded);
+
+            // Fetch the history replay Data
             const replay = exportReplay(loaded);
             daemon.sendResponse(ws, msgId, {
                 success: true,
