@@ -57,13 +57,10 @@ export const WebFetchTool = defineTool('webfetch', {
         'For search engine queries, use the websearch tool instead.',
     ].join('\n'),
     parameters: z.object({
-        url: z.string().describe('The URL to fetch'),
-        maxLength: z.number()
-            .describe('Maximum number of characters to return (default 20000)')
-            .optional(),
+        url: z.string().describe('The URL to fetch')
     }),
     async execute(params) {
-        const maxLength = params.maxLength ?? DEFAULT_MAX_LENGTH;
+        const maxLength = DEFAULT_MAX_LENGTH;
 
         try {
             const controller = new AbortController();

@@ -41,7 +41,7 @@ function replayToMessages(replay: ReplayExport): ChatMessage[] {
       const last = messages[messages.length - 1]
       if (last?.role === 'agent') {
         const toolCalls = last.toolCalls || []
-        toolCalls.push({ name: step.summary.replace(/^Tool: /, ''), args: '', status: 'done' })
+        toolCalls.push({ id: `mock-${Date.now()}-${Math.random()}`, name: step.summary.replace(/^Tool: /, ''), args: '', status: 'done' })
         last.toolCalls = toolCalls
       }
       continue
@@ -100,8 +100,20 @@ function App() {
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === 'agent') {
-        const toolCalls = [...(last.toolCalls || []), { name: data.name, args: data.args, status: 'running' as const }]
-        return [...prev.slice(0, -1), { ...last, toolCalls }]
+        const existingToolCalls = last.toolCalls || []
+        const existingIndex = existingToolCalls.findIndex(tc => tc.id === data.id)
+
+        let newToolCalls;
+        if (existingIndex >= 0) {
+          // Update existing tool call args
+          newToolCalls = [...existingToolCalls];
+          newToolCalls[existingIndex] = { ...newToolCalls[existingIndex], args: data.args || '' }
+        } else {
+          // Add new tool call
+          newToolCalls = [...existingToolCalls, { id: data.id, name: data.name, args: data.args || '', status: 'running' as const }]
+        }
+
+        return [...prev.slice(0, -1), { ...last, toolCalls: newToolCalls }]
       }
       return prev
     })
@@ -109,12 +121,12 @@ function App() {
 
   // Tool Call 结果
   useEvent('agent:tool_result', (msg: RpcMessage) => {
-    const data = msg.data as { name: string; result: string }
+    const data = msg.data as { id: string; name: string; result: string }
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === 'agent' && last.toolCalls) {
         const toolCalls = last.toolCalls.map((tc) =>
-          tc.name === data.name && tc.status === 'running'
+          tc.id === data.id && tc.status === 'running'
             ? { ...tc, result: data.result, status: 'done' as const }
             : tc,
         )
@@ -126,13 +138,13 @@ function App() {
 
   // 错误通知（Sandbox 拒绝 / 工具执行失败）
   useEvent('agent:error', (msg: RpcMessage) => {
-    const data = msg.data as { tool?: string; error?: string; reason?: string }
+    const data = msg.data as { id?: string; tool?: string; error?: string; reason?: string }
     const errorText = data.reason || data.error || 'Unknown error'
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === 'agent') {
         const toolCalls = (last.toolCalls || []).map((tc) =>
-          tc.name === data.tool && tc.status === 'running'
+          (data.id ? tc.id === data.id : tc.name === data.tool) && tc.status === 'running'
             ? { ...tc, result: `⚠️ ${errorText}`, status: 'error' as const }
             : tc,
         )
@@ -142,6 +154,23 @@ function App() {
         ...prev,
         { id: `error-${Date.now()}`, role: 'agent', content: `⚠️ Error: ${errorText}`, timestamp: Date.now() },
       ]
+    })
+  })
+
+  // 自动审批通知（AI Secondary Reviewer）
+  useEvent('agent:approve', (msg: RpcMessage) => {
+    const data = msg.data as { id?: string; tool: string; reason: string }
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'agent') {
+        const toolCalls = (last.toolCalls || []).map((tc) =>
+          (data.id ? tc.id === data.id : tc.name === data.tool) && tc.status === 'running'
+            ? { ...tc, approvalReason: data.reason }
+            : tc,
+        )
+        return [...prev.slice(0, -1), { ...last, toolCalls }]
+      }
+      return prev
     })
   })
 

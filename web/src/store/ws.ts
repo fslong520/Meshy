@@ -23,6 +23,7 @@ export interface ChatMessage {
 }
 
 export interface ToolCallInfo {
+    id: string;
     name: string;
     args: string;
     result?: string;

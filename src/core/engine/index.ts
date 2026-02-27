@@ -710,7 +710,10 @@ export class TaskEngine {
                         this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
                     } else if (event.type === 'tool_call_chunk') {
                         if (pendingToolCalls.length > 0) {
-                            pendingToolCalls[pendingToolCalls.length - 1].rawArgs += event.data;
+                            const pendingObj = pendingToolCalls[pendingToolCalls.length - 1];
+                            pendingObj.rawArgs += event.data;
+                            // Optionally broadcast the accumulated args to the frontend for streaming
+                            this.daemon?.broadcast('agent:tool_call', { id: pendingObj.id, name: pendingObj.name, args: pendingObj.rawArgs });
                         }
                     } else if (event.type === 'done') {
                         isDone = true;
@@ -748,7 +751,7 @@ export class TaskEngine {
                 const executionPromises = pendingToolCalls.map(async (call) => {
                     const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
                     this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
-                    const result = await this.executeTool(call.name, parsedArgs);
+                    const result = await this.executeTool(call.id, call.name, parsedArgs);
                     this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
                     return { id: call.id, result };
                 });
@@ -926,7 +929,7 @@ export class TaskEngine {
         }));
     }
 
-    private async executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+    private async executeTool(id: string, name: string, args: Record<string, unknown>): Promise<string> {
         // ── Phase 3: 沙盒审批网关 ──
         const actionType = name === 'readFile' ? 'read_file' : name === 'editFile' ? 'edit_file' : 'run_command';
         const detail = `${name}(${JSON.stringify(args).slice(0, 120)})`;
@@ -934,13 +937,13 @@ export class TaskEngine {
 
         if (!approval.approved) {
             const reason = approval.reason || 'User denied the action.';
-            this.daemon?.broadcast('agent:error', { tool: name, reason });
+            this.daemon?.broadcast('agent:error', { id, tool: name, reason });
             return `Action denied by sandbox: ${reason}`;
         }
 
         // Broadcast if it was auto-approved by AI
         if (approval.autoApproved && this.daemon) {
-            this.daemon.broadcast('agent:approve', { tool: name, reason: approval.reason || 'AI Secondary Reviewer approved automatically.' });
+            this.daemon.broadcast('agent:approve', { id, tool: name, reason: approval.reason || 'AI Secondary Reviewer approved automatically.' });
         }
 
         try {
@@ -956,7 +959,7 @@ export class TaskEngine {
             return result.output;
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
-            this.daemon?.broadcast('agent:error', { tool: name, error: message });
+            this.daemon?.broadcast('agent:error', { id, tool: name, error: message });
             return `Error executing "${name}": ${message}`;
         }
     }
