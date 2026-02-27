@@ -217,7 +217,7 @@ export class ExecutionSandbox {
 
         // 第三级：中等风险，转交 AI 二次审阅
         if (this.reviewer) {
-            console.log(`[Sandbox:SMART] Running AI Secondary Review for: ${actionType} — ${detail.slice(0, 80)}`);
+            console.log(`[Sandbox:SMART] Running AI Secondary Review for: ${actionType} — ${detail}`);
             const review = await this.reviewer.reviewAction(actionType, detail);
             if (review.approved) {
                 console.log(`[Sandbox:SMART] AI Approved. Reason: ${review.reason}`);

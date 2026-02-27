@@ -123,6 +123,27 @@ function App() {
     })
   })
 
+  // 错误通知（Sandbox 拒绝 / 工具执行失败）
+  useEvent('agent:error', (msg: RpcMessage) => {
+    const data = msg.data as { tool?: string; error?: string; reason?: string }
+    const errorText = data.reason || data.error || 'Unknown error'
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'agent') {
+        const toolCalls = (last.toolCalls || []).map((tc) =>
+          tc.name === data.tool && tc.status === 'running'
+            ? { ...tc, result: `⚠️ ${errorText}`, status: 'error' as const }
+            : tc,
+        )
+        return [...prev.slice(0, -1), { ...last, toolCalls }]
+      }
+      return [
+        ...prev,
+        { id: `error-${Date.now()}`, role: 'agent', content: `⚠️ Error: ${errorText}`, timestamp: Date.now() },
+      ]
+    })
+  })
+
   // 审批请求
   useEvent('approval:request', (msg: RpcMessage) => {
     const data = msg.data as { id: string; question: string; context?: string }

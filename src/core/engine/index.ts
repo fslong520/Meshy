@@ -584,7 +584,7 @@ export class TaskEngine {
 
                 // Orchestrator 收集汇报
                 this.session.addMessage({ role: 'assistant', content: `[Worker @${agentConfig.name} Report]\n${report}` });
-                this.daemon?.broadcast('agent:text', `\n[Worker @${agentConfig.name} Report]\n${report}\n`);
+                this.daemon?.broadcast('agent:text', { text: `\n[Worker @${agentConfig.name} Report]\n${report}\n`, id: `worker-${Date.now()}` });
 
                 this.workspace.snapshotManager.clearSnapshot(this.session.id);
                 this.daemon?.broadcast('agent:done', {});
@@ -695,6 +695,7 @@ export class TaskEngine {
                         pendingToolCalls.push(newCall);
                         process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
                         this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
+                        this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
                     } else if (event.type === 'tool_call_chunk') {
                         if (pendingToolCalls.length > 0) {
                             pendingToolCalls[pendingToolCalls.length - 1].rawArgs += event.data;
