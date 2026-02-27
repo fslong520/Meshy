@@ -81,9 +81,30 @@ export function ChatPanel({ messages, onApproval }: Props) {
             {/* 消息流 */}
             <div className="chat-messages" ref={scrollRef}>
                 {messages.length === 0 && (
-                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', paddingTop: 80 }}>
-                        <div style={{ fontSize: 32, marginBottom: 8 }}>🤖</div>
-                        <div>Start a conversation to begin</div>
+                    <div style={{
+                        textAlign: 'center',
+                        paddingTop: 120,
+                        animation: 'fadeIn 0.8s ease',
+                    }}>
+                        <div style={{ fontSize: 48, marginBottom: 12, filter: 'drop-shadow(0 0 8px rgba(74,222,128,0.3))' }}>🤖</div>
+                        <div style={{
+                            fontSize: 18,
+                            fontWeight: 600,
+                            background: 'linear-gradient(135deg, #4ade80, #38bdf8)',
+                            WebkitBackgroundClip: 'text',
+                            WebkitTextFillColor: 'transparent',
+                            marginBottom: 8,
+                        }}>
+                            Start a conversation
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6 }}>
+                            Type a message below, or use <code style={{ background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>/help</code> for commands
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 16, opacity: 0.6 }}>
+                            <kbd style={{ background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 11 }}>Enter</kbd> to send
+                            &nbsp;·&nbsp;
+                            <kbd style={{ background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 11 }}>Shift+Enter</kbd> for new line
+                        </div>
                     </div>
                 )}
 

@@ -91,29 +91,56 @@ export class DaemonServer extends EventEmitter {
         console.log(`[Daemon] Serving static files from: ${publicDir}`);
 
         this.httpServer = http.createServer((req, res) => {
-            // 简单静态文件服务
-            let filePath = path.join(publicDir, req.url === '/' ? 'index.html' : req.url || '');
-            const extname = path.extname(filePath);
-            const contentType = {
+            const MIME: Record<string, string> = {
                 '.html': 'text/html',
                 '.js': 'text/javascript',
+                '.mjs': 'text/javascript',
                 '.css': 'text/css',
                 '.json': 'application/json',
                 '.png': 'image/png',
-            }[extname] || 'text/plain';
+                '.jpg': 'image/jpeg',
+                '.svg': 'image/svg+xml',
+                '.ico': 'image/x-icon',
+                '.woff': 'font/woff',
+                '.woff2': 'font/woff2',
+                '.ttf': 'font/ttf',
+                '.webp': 'image/webp',
+            };
+
+            const urlPath = (req.url || '/').split('?')[0]; // strip query string
+            let filePath = path.join(publicDir, urlPath === '/' ? 'index.html' : urlPath);
+            const extname = path.extname(filePath);
+            const contentType = MIME[extname] || 'application/octet-stream';
 
             fs.readFile(filePath, (err, content) => {
                 if (err) {
                     if (err.code === 'ENOENT') {
-                        res.writeHead(404);
-                        res.end('File not found', 'utf-8');
+                        // SPA fallback: if the requested path has no extension, serve index.html
+                        if (!extname || extname === '.html') {
+                            const indexPath = path.join(publicDir, 'index.html');
+                            fs.readFile(indexPath, (err2, indexContent) => {
+                                if (err2) {
+                                    res.writeHead(500);
+                                    res.end('Internal Server Error');
+                                } else {
+                                    res.writeHead(200, { 'Content-Type': 'text/html' });
+                                    res.end(indexContent, 'utf-8');
+                                }
+                            });
+                        } else {
+                            res.writeHead(404);
+                            res.end('Not found');
+                        }
                     } else {
                         res.writeHead(500);
-                        res.end(`Server Error: ${err.code}`, 'utf-8');
+                        res.end(`Server Error: ${err.code}`);
                     }
                 } else {
-                    res.writeHead(200, { 'Content-Type': contentType });
-                    res.end(content, 'utf-8');
+                    res.writeHead(200, {
+                        'Content-Type': contentType,
+                        'Cache-Control': extname === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+                    });
+                    res.end(content);
                 }
             });
         });
