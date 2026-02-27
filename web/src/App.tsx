@@ -5,10 +5,74 @@ import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
 import { InputArea } from './components/InputArea'
 
+// ─── Replay 类型定义 ───
+
+interface ReplayStep {
+  index: number;
+  role: 'system' | 'user' | 'assistant';
+  type: 'text' | 'tool_call' | 'tool_result';
+  summary: string;
+}
+
+interface ReplayExport {
+  sessionId: string;
+  totalSteps: number;
+  steps: ReplayStep[];
+  blackboard: {
+    currentGoal: string;
+    tasks: Array<{ id: string; description: string; status: string }>;
+  };
+}
+
+/**
+ * 将 Replay 步骤转换为 ChatMessage 数组，用于在 ChatPanel 中回放历史。
+ */
+function replayToMessages(replay: ReplayExport): ChatMessage[] {
+  const messages: ChatMessage[] = []
+
+  for (const step of replay.steps) {
+    if (step.role === 'system') continue // 跳过 system prompt
+
+    const role: 'user' | 'agent' = step.role === 'user' && step.type === 'text' ? 'user' : 'agent'
+
+    if (step.type === 'tool_call') {
+      // 附加到最后一个 agent 消息
+      const last = messages[messages.length - 1]
+      if (last?.role === 'agent') {
+        const toolCalls = last.toolCalls || []
+        toolCalls.push({ name: step.summary.replace(/^Tool: /, ''), args: '', status: 'done' })
+        last.toolCalls = toolCalls
+      }
+      continue
+    }
+
+    if (step.type === 'tool_result' && step.role === 'user') {
+      // tool_result 属于 user 角色但实际上是 tool 回复，附加到最后一个 agent
+      const last = messages[messages.length - 1]
+      if (last?.role === 'agent' && last.toolCalls) {
+        const lastTc = last.toolCalls[last.toolCalls.length - 1]
+        if (lastTc) lastTc.result = step.summary.replace(/^Result: /, '')
+      }
+      continue
+    }
+
+    messages.push({
+      id: `replay-${step.index}`,
+      role,
+      content: step.summary,
+      timestamp: Date.now(),
+    })
+  }
+
+  return messages
+}
+
 function App() {
   const { connected } = useWebSocket()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [bbOpen, setBbOpen] = useState(false)
+  const [bbGoal, setBbGoal] = useState('')
+  const [bbTasks, setBbTasks] = useState<Array<{ id: string; description: string; status: string }>>([])
   const [agentStreaming, setAgentStreaming] = useState(false)
 
   // 接收 Agent 流式文本
@@ -103,9 +167,26 @@ function App() {
     )
   }, [])
 
+  // Session 切换：加载历史消息
+  const handleSessionSwitch = useCallback((sessionId: string) => {
+    sendRpc<{ success: boolean; replay?: ReplayExport }>('session:switch', { sessionId }).then((res) => {
+      if (res?.success && res.replay) {
+        const historicalMessages = replayToMessages(res.replay)
+        setMessages(historicalMessages)
+        setBbGoal(res.replay.blackboard.currentGoal)
+        setBbTasks(res.replay.blackboard.tasks)
+      } else {
+        // 新 session，清空消息
+        setMessages([])
+        setBbGoal('')
+        setBbTasks([])
+      }
+    })
+  }, [])
+
   return (
     <div className="app-layout">
-      <LeftSidebar connected={connected} />
+      <LeftSidebar connected={connected} onSessionSwitch={handleSessionSwitch} />
       <div className="center-panel">
         <ChatPanel messages={messages} onApproval={handleApproval} />
         <InputArea onSend={handleSend} disabled={agentStreaming} connected={connected} />
@@ -118,9 +199,25 @@ function App() {
       </button>
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
         <h3>Blackboard</h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-          Goal and task status will appear here during active sessions.
-        </p>
+        {bbGoal ? (
+          <>
+            <p style={{ color: 'var(--text-primary)', fontSize: 14, marginBottom: 8 }}>
+              🎯 {bbGoal}
+            </p>
+            {bbTasks.map((t) => (
+              <div className="bb-task" key={t.id}>
+                <input type="checkbox" checked={t.status === 'completed'} readOnly />
+                <span style={{ color: t.status === 'completed' ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                  {t.description}
+                </span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Goal and task status will appear here during active sessions.
+          </p>
+        )}
       </div>
     </div>
   )

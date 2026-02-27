@@ -241,16 +241,40 @@ export async function runServer(port: number) {
         });
     });
 
-    daemon.on('session:list', (ws, msgId) => {
+    daemon.on('session:list', (ws: import('ws').WebSocket, msgId: string) => {
         daemon.sendResponse(ws, msgId, {
             sessions: sessionManager.listSessions()
         });
     });
 
-    daemon.on('session:switch', async (sessionId: string, ws, msgId) => {
-        const newSession = sessionManager.loadSession(sessionId);
-        if (newSession) {
-            daemon.sendResponse(ws, msgId, { success: true, sessionId });
+    daemon.on('session:create', (ws: import('ws').WebSocket, msgId: string) => {
+        const newSession = sessionManager.createSession();
+        console.log(`[Meshy] Web UI created new session: ${newSession.id}`);
+        daemon.sendResponse(ws, msgId, {
+            sessionId: newSession.id,
+            sessions: sessionManager.listSessions(),
+        });
+    });
+
+    daemon.on('session:get', (ws: import('ws').WebSocket, msgId: string) => {
+        // 返回当前活跃 session 的 replay 数据
+        const replay = exportReplay(session);
+        daemon.sendResponse(ws, msgId, {
+            sessionId: session.id,
+            replay,
+        });
+    });
+
+    daemon.on('session:switch', async (sessionId: string, ws: import('ws').WebSocket, msgId: string) => {
+        const loaded = sessionManager.loadSession(sessionId);
+        if (loaded) {
+            // 返回该 session 的 replay 数据
+            const replay = exportReplay(loaded);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                sessionId,
+                replay,
+            });
         } else {
             daemon.sendResponse(ws, msgId, { success: false, error: 'Session not found' });
         }

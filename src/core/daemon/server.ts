@@ -269,6 +269,11 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'session:create': {
+                this.emit('session:create', ws, msg.id);
+                break;
+            }
+
             case 'session:switch': {
                 const sessionId = msg.params?.sessionId as string;
                 this.emit('session:switch', sessionId, ws, msg.id);
