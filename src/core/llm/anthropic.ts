@@ -11,6 +11,8 @@ import {
 export class AnthropicAdapter implements ILLMProvider {
     private client: Anthropic;
     private model: string;
+    private originalBaseUrl: string | undefined;
+    private apiKey: string;
 
     constructor(apiKey: string, model: string = 'claude-3-5-sonnet-20240620', baseURL?: string) {
         // Anthropic SDK 会自内部追加 /v1/messages，
@@ -18,6 +20,8 @@ export class AnthropicAdapter implements ILLMProvider {
         const normalizedBaseURL = baseURL?.replace(/\/v1\/?$/, '') || undefined;
         this.client = new Anthropic({ apiKey, baseURL: normalizedBaseURL });
         this.model = model;
+        this.originalBaseUrl = baseURL;
+        this.apiKey = apiKey;
     }
 
     async generateResponseStream(
@@ -102,5 +106,26 @@ export class AnthropicAdapter implements ILLMProvider {
 
     supportsEmbedding(): boolean {
         return false;
+    }
+
+    async listModelsAsync(): Promise<string[]> {
+        // 尝试通过 HTTP 请求 /v1/models 获取动态模型列表（适用于 OpenAI 兼容代理）
+        if (this.originalBaseUrl) {
+            try {
+                const modelsUrl = this.originalBaseUrl.replace(/\/$/, '') + '/models';
+                const response = await fetch(modelsUrl, {
+                    headers: { 'Authorization': `Bearer ${this.apiKey}` },
+                });
+                if (response.ok) {
+                    const data = await response.json() as { data?: Array<{ id: string }> };
+                    if (data.data && Array.isArray(data.data)) {
+                        return data.data.map(m => m.id);
+                    }
+                }
+            } catch (err) {
+                console.warn('[AnthropicAdapter] Failed to fetch models from custom endpoint:', err instanceof Error ? err.message : err);
+            }
+        }
+        return [];
     }
 }

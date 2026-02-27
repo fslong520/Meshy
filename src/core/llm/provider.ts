@@ -53,4 +53,9 @@ export interface ILLMProvider {
      * 仅当 supportsEmbedding() 为 true 时可调用。
      */
     generateEmbedding?(text: string): Promise<number[]>;
+    /**
+     * Fetch the list of dynamically available models from the provider's API.
+     * Only implemented by providers that support querying /v1/models (like OpenAI).
+     */
+    listModelsAsync?(): Promise<string[]>;
 }

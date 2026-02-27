@@ -10,3 +10,4 @@ AGENTS.md
 tests/
 test-*/
 public/assets/
+public/index.html

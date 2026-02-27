@@ -289,9 +289,12 @@ export async function runServer(port: number) {
         daemon.sendResponse(ws, msgId, session.blackboard);
     });
 
-    daemon.on('model:list', (ws, msgId) => {
-        const providers = Object.keys(config.providers);
-        daemon.sendResponse(ws, msgId, { providers, defaultModel: config.models.default });
+    daemon.on('model:list', async (ws, msgId) => {
+        const providers = await providerResolver.listModelsAsync();
+        daemon.sendResponse(ws, msgId, {
+            providers,
+            defaultModel: providerResolver.getActiveDefault()
+        });
     });
 
     daemon.on('model:switch', (modelId: string, ws, msgId) => {

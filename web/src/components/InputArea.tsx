@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { sendRpc } from '../store/ws'
+import { ModelSelector } from './ModelSelector'
 
 interface Props {
     onSend: (text: string) => void;
@@ -11,13 +12,13 @@ interface Props {
 export function InputArea({ onSend, disabled, connected }: Props) {
     const [text, setText] = useState('')
     const [mode, setMode] = useState<'plan' | 'build'>('build')
-    const [models, setModels] = useState<string[]>([])
+    const [models, setModels] = useState<Record<string, { protocol: string, models: string[] }>>({})
     const [activeModel, setActiveModel] = useState<string>('')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     useEffect(() => {
         if (!connected) return
-        sendRpc<{ providers: string[], defaultModel: string }>('model:list').then((res) => {
+        sendRpc<{ providers: Record<string, { protocol: string, models: string[] }>, defaultModel: string }>('model:list').then((res) => {
             if (res) {
                 setModels(res.providers)
                 setActiveModel(res.defaultModel)
@@ -25,8 +26,7 @@ export function InputArea({ onSend, disabled, connected }: Props) {
         })
     }, [connected])
 
-    const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const newModel = e.target.value;
+    const handleModelChange = (newModel: string) => {
         setActiveModel(newModel)
         sendRpc('model:switch', { model: newModel })
     }
@@ -63,10 +63,11 @@ export function InputArea({ onSend, disabled, connected }: Props) {
                     <Paperclip size={14} /> Attach
                 </button>
 
-                <select title="Select model" value={activeModel} onChange={handleModelChange}>
-                    {models.includes(activeModel) ? null : <option value={activeModel}>{activeModel}</option>}
-                    {models.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <ModelSelector
+                    providers={models}
+                    activeModel={activeModel}
+                    onSelect={handleModelChange}
+                />
 
                 <select title="Select agent">
                     <option>@Manager</option>

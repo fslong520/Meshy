@@ -125,4 +125,14 @@ export class OpenAIAdapter implements ILLMProvider {
         });
         return response.data[0].embedding;
     }
+
+    async listModelsAsync(): Promise<string[]> {
+        try {
+            const list = await this.client.models.list();
+            return list.data.map(m => m.id);
+        } catch (err) {
+            console.warn(`[OpenAIAdapter] Failed to list models:`, err instanceof Error ? err.message : err);
+            return [];
+        }
+    }
 }

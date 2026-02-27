@@ -31,32 +31,61 @@ interface ReplayExport {
 function replayToMessages(replay: ReplayExport): ChatMessage[] {
   const messages: ChatMessage[] = []
 
-  for (const step of replay.steps) {
-    if (step.role === 'system') continue // 跳过 system prompt
-
-    const role: 'user' | 'agent' = step.role === 'user' && step.type === 'text' ? 'user' : 'agent'
-
-    if (step.type === 'tool_call') {
-      // 附加到最后一个 agent 消息
-      const last = messages[messages.length - 1]
-      if (last?.role === 'agent') {
-        const toolCalls = last.toolCalls || []
-        toolCalls.push({ id: `mock-${Date.now()}-${Math.random()}`, name: step.summary.replace(/^Tool: /, ''), args: '', status: 'done' })
-        last.toolCalls = toolCalls
+  /** 确保最后一条消息是 agent 且有 toolCalls 数组，否则创建一个 */
+  const ensureAgentContext = (stepIndex: number): ChatMessage => {
+    let last = messages[messages.length - 1]
+    if (!last || last.role !== 'agent') {
+      const agentMsg: ChatMessage = {
+        id: `replay-agent-${stepIndex}`,
+        role: 'agent',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [],
       }
+      messages.push(agentMsg)
+      last = agentMsg
+    }
+    if (!last.toolCalls) last.toolCalls = []
+    return last
+  }
+
+  for (const step of replay.steps) {
+    if (step.role === 'system') continue
+
+    // ── tool_call: 从 raw 中提取结构化数据 ──
+    if (step.type === 'tool_call') {
+      const agent = ensureAgentContext(step.index)
+      const raw = step.raw as { id?: string; name?: string; arguments?: unknown } | null
+
+      agent.toolCalls!.push({
+        id: raw?.id ?? `mock-tc-${step.index}`,
+        name: raw?.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, ''),
+        args: raw?.arguments ? JSON.stringify(raw.arguments) : '',
+        status: 'done',
+      })
       continue
     }
 
-    if (step.type === 'tool_result' && step.role === 'user') {
-      // tool_result 属于 user 角色但实际上是 tool 回复，附加到最后一个 agent
+    // ── tool_result: 按 id 匹配到对应的 tool_call ──
+    if (step.type === 'tool_result') {
+      const raw = step.raw as { id?: string; content?: string } | null
+      const resultText = raw?.content ?? step.summary.replace(/^Result:\s*/, '')
+
+      // 查找上一个 agent 消息中匹配的 tool_call 并附加 result
       const last = messages[messages.length - 1]
       if (last?.role === 'agent' && last.toolCalls) {
-        const lastTc = last.toolCalls[last.toolCalls.length - 1]
-        if (lastTc) lastTc.result = step.summary.replace(/^Result: /, '')
+        const matchedTc = raw?.id
+          ? last.toolCalls.find(tc => tc.id === raw.id)
+          : last.toolCalls[last.toolCalls.length - 1]
+        if (matchedTc) {
+          matchedTc.result = resultText
+        }
       }
       continue
     }
 
+    // ── 普通文本消息 ──
+    const role: 'user' | 'agent' = step.role === 'user' ? 'user' : 'agent'
     messages.push({
       id: `replay-${step.index}`,
       role,

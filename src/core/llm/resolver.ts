@@ -114,6 +114,76 @@ export class ProviderResolver {
         }));
     }
 
+    // 缓存拉取到的可用模型列表
+    private cachedModels: Record<string, { protocol: string, models: string[] }> | null = null;
+
+    /**
+     * 获取所有可用的模型（按 Provider 分组），支持异步动态获取。
+     * 当 API 获取失败时，从 config 中提取已配置的模型 ID 作为兜底。
+     */
+    public async listModelsAsync(): Promise<Record<string, { protocol: string, models: string[] }>> {
+        if (this.cachedModels) {
+            return this.cachedModels;
+        }
+
+        // 从 config.models 中按 provider 分组提取的兜底模型
+        const configModelsByProvider = this.extractConfigModels();
+        const result: Record<string, { protocol: string, models: string[] }> = {};
+
+        for (const [name, cfg] of Object.entries(this.config.providers)) {
+            let models: string[] = [];
+
+            try {
+                const provider = this.resolveInstance(name, cfg, 'dummy-model-for-list');
+                if (provider.listModelsAsync) {
+                    models = await provider.listModelsAsync();
+                }
+            } catch (e) {
+                console.warn(`[ProviderResolver] Failed to list models for provider ${name}:`, e instanceof Error ? e.message : e);
+            }
+
+            // 如果动态获取失败或为空，使用 config 中配置的模型作为 fallback
+            if (models.length === 0 && configModelsByProvider[name]) {
+                models = [...configModelsByProvider[name]];
+            }
+
+            // 确保当前活跃的 default model 也在列表中
+            const [defaultProvider, defaultModelId] = this.activeDefault.split('/');
+            if (name === defaultProvider && !models.includes(defaultModelId)) {
+                models.unshift(defaultModelId);
+            }
+
+            result[name] = { protocol: cfg.protocol, models };
+        }
+
+        this.cachedModels = result;
+        return result;
+    }
+
+    /**
+     * 从 config.models (default/fallback/small) 中提取各 provider 下的模型 ID
+     */
+    private extractConfigModels(): Record<string, string[]> {
+        const result: Record<string, string[]> = {};
+        const entries = [
+            this.config.models.default,
+            this.config.models.fallback,
+            this.config.models.small,
+        ].filter(Boolean);
+
+        for (const entry of entries) {
+            const slashIdx = entry.indexOf('/');
+            if (slashIdx === -1) continue;
+            const provider = entry.substring(0, slashIdx);
+            const modelId = entry.substring(slashIdx + 1);
+            if (!result[provider]) result[provider] = [];
+            if (!result[provider].includes(modelId)) {
+                result[provider].push(modelId);
+            }
+        }
+        return result;
+    }
+
     /**
      * 列出所有已配置的 Provider 名称
      */
