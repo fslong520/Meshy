@@ -600,7 +600,6 @@ export class TaskEngine {
                 this.session.addMessage({ role: 'assistant', content: `[Worker @${agentConfig.name} Report]\n${report}` });
                 this.daemon?.broadcast('agent:text', { text: `\n[Worker @${agentConfig.name} Report]\n${report}\n`, id: `worker-${Date.now()}` });
 
-                this.workspace.snapshotManager.clearSnapshot(this.session.id);
                 this.daemon?.broadcast('agent:done', {});
                 return;
             }
@@ -613,8 +612,7 @@ export class TaskEngine {
 
         await this.runLLMLoop(injection);
 
-        // 如果全部完成，清除快照以防下次误报
-        this.workspace.snapshotManager.clearSnapshot(this.session.id);
+        // Execution finished successfully, history is preserved in the ongoing session.
     }
 
     /**

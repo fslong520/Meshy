@@ -78,20 +78,16 @@ export class SnapshotManager {
      */
     public clearSnapshot(sessionId?: string): void {
         try {
+            // We NO LONGER delete the actual .json snapshot files, 
+            // as they store the permanent chat history per Phase 12 Session Management.
+
             let idToRemove = sessionId;
             if (!idToRemove && fs.existsSync(this.latestFile)) {
                 idToRemove = fs.readFileSync(this.latestFile, 'utf-8').trim();
             }
 
-            if (idToRemove) {
-                const filePath = path.join(this.sessionsDir, `${idToRemove}.json`);
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
-            }
-
-            // 如果清理的正好是 latest，则移除 latest 指针
-            if (fs.existsSync(this.latestFile)) {
+            // If the cleared session is exactly the latest crashed session, remove the pointer.
+            if (idToRemove && fs.existsSync(this.latestFile)) {
                 const currentLatest = fs.readFileSync(this.latestFile, 'utf-8').trim();
                 if (currentLatest === idToRemove) {
                     fs.unlinkSync(this.latestFile);
