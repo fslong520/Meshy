@@ -43,9 +43,31 @@ export class CompactionAgent {
     async compact(session: Session): Promise<void> {
         const logger = getLogger();
         const totalMessages = session.history.length;
-        const cutIndex = totalMessages - KEEP_RECENT;
+        let cutIndex = totalMessages - KEEP_RECENT;
 
         if (cutIndex <= 0) return;
+
+        // --- Safe Cut Boundary Logic ---
+        // Retreat cutIndex to older messages if we landed in the middle of a tool interaction
+        while (cutIndex > 0 && cutIndex < totalMessages) {
+            const currentMsg = session.history[cutIndex];
+            const prevMsg = session.history[cutIndex - 1];
+
+            const prevIsToolCall = prevMsg.role === 'assistant' && typeof prevMsg.content === 'object' && prevMsg.content !== null && 'type' in prevMsg.content && prevMsg.content.type === 'tool_call';
+            const currentIsToolResult = currentMsg.role === 'tool' || (typeof currentMsg.content === 'object' && currentMsg.content !== null && 'type' in currentMsg.content && currentMsg.content.type === 'tool_result');
+
+            if (prevIsToolCall || currentIsToolResult) {
+                // Unsafe boundary, move backwards (reduce cutIndex) to keep this chain in the "recent" half
+                cutIndex--;
+            } else {
+                break;
+            }
+        }
+
+        if (cutIndex <= 0) {
+            logger.warn('ENGINE', 'Could not find a safe boundary to split tool calls. Skipping compaction this turn to avoid corruption.');
+            return;
+        }
 
         const oldMessages = session.history.slice(0, cutIndex);
         const recentMessages = session.history.slice(cutIndex);

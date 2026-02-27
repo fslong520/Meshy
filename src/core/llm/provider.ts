@@ -5,7 +5,7 @@ export interface StandardTool {
 }
 
 export interface StandardMessage {
-    role: 'system' | 'user' | 'assistant';
+    role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | StandardToolCall | StandardToolResult;
 }
 
