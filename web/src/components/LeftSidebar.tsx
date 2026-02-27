@@ -19,6 +19,8 @@ interface Props {
 export function LeftSidebar({ connected, onSessionSwitch }: Props) {
     const [sessions, setSessions] = useState<SessionInfo[]>([])
     const [activeSession, setActiveSession] = useState<string | null>(null)
+    const [workspaces, setWorkspaces] = useState<string[]>([])
+    const [activeWorkspace, setActiveWorkspace] = useState<string>('')
 
     const refreshSessions = useCallback(() => {
         if (!connected) return
@@ -27,9 +29,22 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
         })
     }, [connected])
 
+    const refreshWorkspaces = useCallback(() => {
+        if (!connected) return
+        sendRpc<{ workspaces: string[] }>('workspace:list').then((res) => {
+            if (res && res.workspaces) {
+                setWorkspaces(res.workspaces)
+                if (!activeWorkspace && res.workspaces.length > 0) {
+                    setActiveWorkspace(res.workspaces[res.workspaces.length - 1])
+                }
+            }
+        })
+    }, [connected, activeWorkspace])
+
     useEffect(() => {
         refreshSessions()
-    }, [refreshSessions])
+        refreshWorkspaces()
+    }, [refreshSessions, refreshWorkspaces])
 
     const handleNewSession = useCallback(() => {
         sendRpc<{ sessionId: string; sessions: SessionInfo[] }>('session:create').then((res) => {
@@ -53,6 +68,34 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
         } catch { return '' }
     }
 
+    const handleWorkspaceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const val = e.target.value
+        if (val === '__add_new__') {
+            const newPath = window.prompt('Enter absolute path to new workspace directory:')
+            if (newPath) {
+                const res = await sendRpc<{ success: boolean; error?: string }>('workspace:add', { path: newPath })
+                if (res.success) {
+                    refreshWorkspaces()
+                } else {
+                    alert(`Failed to add workspace: ${res.error}`)
+                }
+            }
+            // Reset select back to current active workspace
+            e.target.value = activeWorkspace
+            return
+        }
+
+        const res = await sendRpc<{ success: boolean; sessionId: string; error?: string }>('workspace:switch', { targetPath: val })
+        if (res.success) {
+            setActiveWorkspace(val)
+            setActiveSession(res.sessionId)
+            refreshSessions()
+            onSessionSwitch?.(res.sessionId) // Triggers ChatPanel reset
+        } else {
+            alert(`Failed to switch workspace: ${res.error}`)
+        }
+    }
+
     return (
         <div className="left-sidebar">
             {/* Header */}
@@ -64,8 +107,16 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
             {/* Workspace */}
             <div className="sidebar-section">
                 <div className="sidebar-section-title">Workspace</div>
-                <select>
-                    <option>{import.meta.env.DEV ? 'dev-workspace' : 'current'}</option>
+                <select value={activeWorkspace} onChange={handleWorkspaceChange} style={{
+                    width: '100%', padding: '6px', fontSize: '13px', background: 'var(--bg-subtle)',
+                    color: 'var(--text-main)', border: '1px solid var(--border-color)', borderRadius: '4px',
+                    wordBreak: 'break-all'
+                }}>
+                    <option value="" disabled>Select a Workspace</option>
+                    {workspaces.map(w => (
+                        <option key={w} value={w}>{w}</option>
+                    ))}
+                    <option value="__add_new__">+ Add Workspace...</option>
                 </select>
             </div>
 

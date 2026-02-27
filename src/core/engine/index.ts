@@ -48,7 +48,7 @@ CRITICAL RULES:
 
 export class TaskEngine {
     private providerResolver: ProviderResolver;
-    public readonly workspace: Workspace;
+    public workspace: Workspace;
     private aci: AgentComputerInterface;
     private session: Session;
     private maxRetries: number;

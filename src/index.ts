@@ -211,8 +211,8 @@ export async function runServer(port: number) {
     const providerResolver = new ProviderResolver(config);
 
     const workspaceManager = new WorkspaceManager(providerResolver);
-    const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
-    const sessionManager = new SessionManager(activeWorkspace.rootPath);
+    let activeWorkspace = workspaceManager.getWorkspace(process.cwd());
+    let sessionManager = new SessionManager(activeWorkspace.rootPath);
 
     let session: import('./core/session/state.js').Session;
     const summaries = sessionManager.listSessions();
@@ -245,6 +245,63 @@ export async function runServer(port: number) {
     daemon.on('session:interrupt', () => {
         console.log(`\n[Meshy] Web UI requested session interrupt.`);
         engine.interrupt();
+    });
+
+    daemon.on('workspace:add', (path: string, ws, msgId) => {
+        try {
+            workspaceManager.addWorkspace(path);
+            daemon.sendResponse(ws, msgId, { success: true });
+
+            // Broadcast update
+            daemon.broadcast('workspace:list', { workspaces: workspaceManager.listWorkspaces() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('workspace:remove', (path: string, ws, msgId) => {
+        try {
+            workspaceManager.removeWorkspace(path);
+            daemon.sendResponse(ws, msgId, { success: true });
+
+            // Broadcast update
+            daemon.broadcast('workspace:list', { workspaces: workspaceManager.listWorkspaces() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('workspace:switch', (targetPath: string, ws, msgId) => {
+        try {
+            // Hot-swap backend context
+            activeWorkspace = workspaceManager.getWorkspace(targetPath);
+            sessionManager = new SessionManager(activeWorkspace.rootPath, activeWorkspace.snapshotManager, activeWorkspace.reflectionEngine);
+            engine.workspace = activeWorkspace;
+
+            // Load latest session or create new
+            const summaries = sessionManager.listSessions();
+            if (summaries.length > 0) {
+                session = sessionManager.loadSession(summaries[0].id) || sessionManager.createSession();
+            } else {
+                session = sessionManager.createSession();
+            }
+            engine.setSession(session);
+
+            console.log(`[Meshy] Switched daemon workspace context to: ${targetPath}`);
+
+            const replay = exportReplay(session);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                targetPath,
+                sessionId: session.id,
+                replay
+            });
+
+            // Broadcast workspace update out in case other clients are connected
+            daemon.broadcast('workspace:list', { workspaces: workspaceManager.listWorkspaces() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
     });
 
     daemon.on('workspace:list', (ws, msgId) => {
@@ -364,12 +421,38 @@ export async function runServer(port: number) {
         if (session.id === sessionId) {
             daemon.sendResponse(ws, msgId, exportReplay(session));
         } else {
-            const replayPath = `${activeWorkspace.rootPath}/.meshy/replays/${sessionId}.replay.json`;
-            const replay = loadReplay(replayPath);
-            if (replay) {
-                daemon.sendResponse(ws, msgId, replay);
+            // We use activeWorkspace instead of process.cwd() fallback since we hot-swap
+            let replayPath = `${activeWorkspace.rootPath}/.meshy/sessions/${sessionId}.jsonl`;
+            let isJsonl = true;
+            if (!require('fs').existsSync(replayPath)) {
+                replayPath = `${activeWorkspace.rootPath}/.meshy/sessions/${sessionId}.json`;
+                isJsonl = false;
+            }
+
+            if (require('fs').existsSync(replayPath)) {
+                try {
+                    const data = require('fs').readFileSync(replayPath, 'utf-8');
+                    const loaded = import('./core/session/state.js').then(m => m.Session.deserialize(data));
+                    // Quick hack: we'd need top-level await for actual deserialization, but since this is just replay
+                    // We let SessionManager load it 
+                    const tmpSession = sessionManager.loadSession(sessionId);
+                    if (tmpSession) {
+                        daemon.sendResponse(ws, msgId, exportReplay(tmpSession));
+                    } else {
+                        daemon.sendResponse(ws, msgId, { error: 'Replay not found or corrupt' });
+                    }
+                } catch (e) {
+                    daemon.sendResponse(ws, msgId, { error: 'Replay load error' });
+                }
             } else {
-                daemon.sendResponse(ws, msgId, { error: 'Replay not found' });
+                // older replay formats 
+                const oldReplay = `${activeWorkspace.rootPath}/.meshy/replays/${sessionId}.replay.json`;
+                const replay = loadReplay(oldReplay);
+                if (replay) {
+                    daemon.sendResponse(ws, msgId, replay);
+                } else {
+                    daemon.sendResponse(ws, msgId, { error: 'Replay not found' });
+                }
             }
         }
     });
