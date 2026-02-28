@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { sendRpc } from '../store/ws'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 type TabName = 'skills' | 'mcp' | 'soul' | 'plugins' | 'messaging';
 
@@ -42,24 +44,127 @@ export function RightPanel({ connected }: { connected: boolean }) {
 }
 
 // ─── Skills Tab ───
+
+interface SkillItem {
+    name: string
+    description: string
+    keywords: string[]
+    source: string
+    filePath: string
+}
+
+type ScopeFilter = 'all' | 'global' | 'project'
+
 function SkillsTab({ connected }: { connected: boolean }) {
-    const [skills, setSkills] = useState<{ name: string, status: string, desc: string }[]>([])
+    const [skills, setSkills] = useState<SkillItem[]>([])
+    const [searchQuery, setSearchQuery] = useState('')
+    const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
+    const [refreshing, setRefreshing] = useState(false)
     const [showBuilderDialog, setShowBuilderDialog] = useState(false)
     const [builderPrompt, setBuilderPrompt] = useState('')
 
+    // Skill Detail Modal States
+    const [selectedSkill, setSelectedSkill] = useState<SkillItem | null>(null)
+    const [selectedSkillContent, setSelectedSkillContent] = useState<string>('')
+    const [editedSkillContent, setEditedSkillContent] = useState<string>('')
+    const [detailViewMode, setDetailViewMode] = useState<'markdown' | 'raw' | 'edit'>('markdown')
+    const [contentLoading, setContentLoading] = useState(false)
+    const [isSaving, setIsSaving] = useState(false)
+
+    const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
     useEffect(() => {
         if (!connected) return
-        sendRpc<{ skills: typeof skills }>('skill:list').then(res => setSkills(res?.skills || []))
+        sendRpc<{ skills: SkillItem[] }>('skill:list').then(res => setSkills(res?.skills || []))
     }, [connected])
+
+    // Debounced search
+    const handleSearch = (q: string) => {
+        setSearchQuery(q)
+        if (debounceRef.current) clearTimeout(debounceRef.current)
+        debounceRef.current = setTimeout(() => {
+            if (q.trim()) {
+                sendRpc<{ skills: SkillItem[] }>('skill:search', { query: q }).then(res => setSkills(res?.skills || []))
+            } else {
+                sendRpc<{ skills: SkillItem[] }>('skill:list').then(res => setSkills(res?.skills || []))
+            }
+        }, 300)
+    }
+
+    const handleRefresh = async () => {
+        setRefreshing(true)
+        const res = await sendRpc<{ skills: SkillItem[] }>('skill:refresh')
+        if (res?.skills) setSkills(res.skills)
+        setRefreshing(false)
+    }
+
+    const handleSkillClick = async (skill: SkillItem) => {
+        setSelectedSkill(skill)
+        setContentLoading(true)
+        setDetailViewMode('markdown')
+        try {
+            const res = await sendRpc<{ success: boolean; content?: string }>('skill:read', { filePath: skill.filePath })
+            if (res?.success && res.content) {
+                setSelectedSkillContent(res.content)
+                setEditedSkillContent(res.content)
+            } else {
+                setSelectedSkillContent('Failed to load skill content.')
+                setEditedSkillContent('')
+            }
+        } catch (e) {
+            setSelectedSkillContent('Error loading skill content.')
+            setEditedSkillContent('')
+        } finally {
+            setContentLoading(false)
+        }
+    }
+
+    const handleSaveSkill = async () => {
+        if (!selectedSkill) return
+        setIsSaving(true)
+        try {
+            const res = await sendRpc<{ success: boolean; error?: string }>('skill:write', {
+                filePath: selectedSkill.filePath,
+                content: editedSkillContent
+            })
+            if (res?.success) {
+                setSelectedSkillContent(editedSkillContent)
+                setDetailViewMode('markdown')
+                handleRefresh() // Refresh the list to update any metadata if changed
+            } else {
+                alert(`Failed to save: ${res?.error || 'Unknown error'}`)
+            }
+        } catch (e: any) {
+            alert(`Error saving skill: ${e.message}`)
+        } finally {
+            setIsSaving(false)
+        }
+    }
+
+    const handleDeleteSkill = async () => {
+        if (!selectedSkill) return
+        if (!window.confirm(`Are you sure you want to delete the skill "${selectedSkill.name}"? This will delete the skill folder and cannot be undone.`)) return
+
+        try {
+            const res = await sendRpc<{ success: boolean; error?: string }>('skill:delete', {
+                filePath: selectedSkill.filePath
+            })
+            if (res?.success) {
+                setSelectedSkill(null)
+                handleRefresh()
+            } else {
+                alert(`Failed to delete: ${res?.error || 'Unknown error'}`)
+            }
+        } catch (e: any) {
+            alert(`Error deleting skill: ${e.message}`)
+        }
+    }
 
     const handleStartBuilder = () => {
         const prompt = builderPrompt.trim()
         if (!prompt) return
-
         setShowBuilderDialog(false)
         setBuilderPrompt('')
-
-        // Create a new isolated session, then submit the skill-creator prompt
         sendRpc<{ sessionId: string }>('session:create').then(res => {
             if (res?.sessionId) {
                 sendRpc('task:submit', { prompt: `@skill:skill-creator ${prompt}` })
@@ -67,35 +172,102 @@ function SkillsTab({ connected }: { connected: boolean }) {
         })
     }
 
+    const filtered = scopeFilter === 'all'
+        ? skills
+        : skills.filter(s => s.source === scopeFilter)
+
     return (
         <div>
-            {skills.map(s => (
-                <div className="list-item" key={s.name}>
-                    <div className="list-item-title">{s.name}</div>
-                    <div className="list-item-desc">{s.desc}</div>
-                    <span className="list-item-status" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                        {s.status}
-                    </span>
-                </div>
-            ))}
-
-            {/* Create Skill Button */}
-            <div style={{ textAlign: 'center', marginTop: 12 }}>
-                <button
-                    onClick={() => setShowBuilderDialog(true)}
+            {/* Toolbar */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 8, alignItems: 'center' }}>
+                <input
+                    value={searchQuery}
+                    onChange={e => handleSearch(e.target.value)}
+                    placeholder="🔍 Search skills..."
                     style={{
-                        padding: '6px 16px',
-                        borderRadius: 4,
-                        border: '1px dashed var(--border)',
-                        background: 'transparent',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        fontSize: 12,
+                        flex: 1, padding: '5px 8px', borderRadius: 4,
+                        border: '1px solid var(--border, #444)', background: 'var(--bg-primary, #151520)',
+                        color: 'var(--text, #eee)', fontSize: 12, fontFamily: 'inherit',
                     }}
-                >
-                    + Create Skill
+                />
+                <button onClick={handleRefresh} style={iconBtnStyle} title="Refresh (rescan all skill dirs)" disabled={refreshing}>
+                    {refreshing ? '⏳' : '🔄'}
                 </button>
+                <button onClick={() => setShowBuilderDialog(true)} style={iconBtnStyle} title="Create Skill with AI">✨</button>
             </div>
+
+            {/* Scope Filter */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+                {(['all', 'global', 'project'] as ScopeFilter[]).map(scope => (
+                    <button
+                        key={scope}
+                        onClick={() => setScopeFilter(scope)}
+                        style={{
+                            padding: '3px 10px', borderRadius: 12, fontSize: 11, cursor: 'pointer',
+                            border: scopeFilter === scope ? '1px solid var(--accent, #6366f1)' : '1px solid var(--border, #444)',
+                            background: scopeFilter === scope ? 'var(--accent-dim, rgba(99,102,241,0.15))' : 'transparent',
+                            color: scopeFilter === scope ? 'var(--accent, #6366f1)' : 'var(--text-muted)',
+                        }}
+                    >
+                        {scope === 'all' ? '📋 All' : scope === 'global' ? '🌍 Global' : '📁 Project'}
+                    </button>
+                ))}
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+                    {filtered.length} skill{filtered.length !== 1 ? 's' : ''}
+                </span>
+            </div>
+
+            {/* List */}
+            {filtered.length === 0 ? (
+                <div className="tab-empty">
+                    <div style={{ fontSize: 20, marginBottom: 6 }}>🧩</div>
+                    <div>{searchQuery ? 'No matching skills' : 'No skills found'}</div>
+                    <div style={{ marginTop: 4, fontSize: 12 }}>
+                        {searchQuery ? 'Try a different keyword' : 'Click 🔄 to scan skill directories'}
+                    </div>
+                </div>
+            ) : (
+                filtered.map(s => (
+                    <div
+                        className="list-item"
+                        key={`${s.source}:${s.name}`}
+                        onClick={() => handleSkillClick(s)}
+                        style={{ cursor: 'pointer' }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div className="list-item-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    {s.name}
+                                    <span style={{
+                                        fontSize: 9, padding: '1px 5px', borderRadius: 3,
+                                        background: s.source === 'global'
+                                            ? 'rgba(251,191,36,0.15)' : 'var(--accent-dim, rgba(99,102,241,0.15))',
+                                        color: s.source === 'global' ? 'var(--warning)' : 'var(--accent)',
+                                    }}>
+                                        {s.source === 'global' ? '🌍' : '📁'}
+                                    </span>
+                                </div>
+                                {s.description && (
+                                    <div className="list-item-desc" style={{ fontSize: 11, lineHeight: 1.4 }}>
+                                        {s.description.length > 100 ? s.description.slice(0, 100) + '…' : s.description}
+                                    </div>
+                                )}
+                                {s.keywords.length > 0 && (
+                                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 3 }}>
+                                        {s.keywords.slice(0, 5).map(k => (
+                                            <span key={k} style={{
+                                                fontSize: 9, padding: '1px 5px', borderRadius: 3,
+                                                background: 'var(--bg-tertiary, rgba(255,255,255,0.05))',
+                                                color: 'var(--text-muted)',
+                                            }}>{k}</span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ))
+            )}
 
             {/* AI Skill Builder Dialog (Cancellable) */}
             {showBuilderDialog && (
@@ -132,7 +304,7 @@ function SkillsTab({ connected }: { connected: boolean }) {
                                 width: '100%', minHeight: 80, padding: 10, borderRadius: 8,
                                 border: '1px solid var(--border, #444)', background: 'var(--bg-primary, #151520)',
                                 color: 'var(--text, #eee)', fontSize: 13, resize: 'vertical',
-                                fontFamily: 'inherit', lineHeight: 1.5,
+                                fontFamily: 'inherit', lineHeight: 1.5, boxSizing: 'border-box',
                             }}
                         />
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
@@ -160,6 +332,169 @@ function SkillsTab({ connected }: { connected: boolean }) {
                             >
                                 🚀 Start
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Skill Details Modal */}
+            {selectedSkill && (
+                <div
+                    style={{
+                        position: 'fixed', inset: 0, zIndex: 999,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
+                    }}
+                    onClick={() => setSelectedSkill(null)}
+                >
+                    <div
+                        style={{
+                            background: 'var(--bg-secondary, #1e1e2e)',
+                            border: '1px solid var(--border, #333)',
+                            borderRadius: 12, padding: 0, width: '80vw', height: '80vh', maxWidth: 900,
+                            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                            display: 'flex', flexDirection: 'column'
+                        }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div style={{
+                            padding: '16px 24px', borderBottom: '1px solid var(--border, #333)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            flexShrink: 0
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <h3 style={{ margin: 0, fontSize: 18, color: 'var(--text, #eee)' }}>
+                                    {selectedSkill.name}
+                                </h3>
+                                <span style={{
+                                    fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                                    background: selectedSkill.source === 'global'
+                                        ? 'rgba(251,191,36,0.15)' : 'var(--accent-dim, rgba(99,102,241,0.15))',
+                                    color: selectedSkill.source === 'global' ? 'var(--warning)' : 'var(--accent)',
+                                }}>
+                                    {selectedSkill.source === 'global' ? '🌍 Global' : '📁 Project'}
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                                {/* Action Buttons */}
+                                {detailViewMode === 'edit' ? (
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <button
+                                            onClick={() => setDetailViewMode('markdown')}
+                                            style={{
+                                                border: '1px solid var(--border, #444)', background: 'transparent',
+                                                color: 'var(--text-muted, #888)', padding: '4px 12px', borderRadius: 4,
+                                                fontSize: 12, cursor: 'pointer', transition: 'all 0.2s'
+                                            }}
+                                            disabled={isSaving}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSaveSkill}
+                                            style={{
+                                                border: 'none', background: 'var(--accent, #6366f1)',
+                                                color: '#fff', padding: '4px 12px', borderRadius: 4,
+                                                fontSize: 12, cursor: isSaving ? 'not-allowed' : 'pointer', transition: 'all 0.2s',
+                                                opacity: isSaving ? 0.7 : 1
+                                            }}
+                                            disabled={isSaving}
+                                        >
+                                            {isSaving ? 'Saving...' : 'Save'}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                                        <button
+                                            onClick={handleDeleteSkill}
+                                            style={{
+                                                background: 'transparent', border: 'none',
+                                                color: 'var(--error, #f87171)', padding: '4px 8px', borderRadius: 4,
+                                                fontSize: 12, cursor: 'pointer', transition: 'all 0.2s',
+                                                display: 'flex', alignItems: 'center'
+                                            }}
+                                        >
+                                            🗑️ Delete
+                                        </button>
+                                        <button
+                                            onClick={() => setDetailViewMode('edit')}
+                                            style={{
+                                                border: '1px solid var(--accent, #6366f1)', background: 'transparent',
+                                                color: 'var(--accent, #6366f1)', padding: '4px 12px', borderRadius: 4,
+                                                fontSize: 12, cursor: 'pointer', transition: 'all 0.2s'
+                                            }}
+                                        >
+                                            Edit
+                                        </button>
+                                        {/* View Toggle */}
+                                        <div style={{ display: 'flex', background: 'var(--bg-primary, #151520)', borderRadius: 6, padding: 2 }}>
+                                            <button
+                                                onClick={() => setDetailViewMode('markdown')}
+                                                style={{
+                                                    border: 'none', background: detailViewMode === 'markdown' ? 'var(--border, #333)' : 'transparent',
+                                                    color: detailViewMode === 'markdown' ? '#fff' : 'var(--text-muted, #888)',
+                                                    padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer', transition: 'all 0.2s'
+                                                }}
+                                            >
+                                                Preview
+                                            </button>
+                                            <button
+                                                onClick={() => setDetailViewMode('raw')}
+                                                style={{
+                                                    border: 'none', background: detailViewMode === 'raw' ? 'var(--border, #333)' : 'transparent',
+                                                    color: detailViewMode === 'raw' ? '#fff' : 'var(--text-muted, #888)',
+                                                    padding: '4px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer', transition: 'all 0.2s'
+                                                }}
+                                            >
+                                                Raw
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                <button
+                                    onClick={() => setSelectedSkill(null)}
+                                    style={{
+                                        background: 'transparent', border: 'none', color: 'var(--text-muted, #888)',
+                                        cursor: 'pointer', fontSize: 20, padding: 4, display: 'flex', alignItems: 'center'
+                                    }}
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Content Body */}
+                        <div style={{ flex: 1, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column' }}>
+                            {contentLoading ? (
+                                <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: 40 }}>Loading content...</div>
+                            ) : detailViewMode === 'edit' ? (
+                                <textarea
+                                    value={editedSkillContent}
+                                    onChange={(e) => setEditedSkillContent(e.target.value)}
+                                    style={{
+                                        flex: 1, width: '100%', padding: 16, borderRadius: 8,
+                                        background: 'var(--bg-primary, #151520)', color: 'var(--text, #eee)',
+                                        border: '1px solid var(--border, #444)', fontSize: 13, lineHeight: 1.5,
+                                        fontFamily: 'var(--font-mono, monospace)', resize: 'none', outline: 'none'
+                                    }}
+                                />
+                            ) : detailViewMode === 'raw' ? (
+                                <pre style={{
+                                    margin: 0, padding: 16, borderRadius: 8, background: 'var(--bg-primary, #151520)',
+                                    color: 'var(--text, #eee)', fontSize: 13, lineHeight: 1.5,
+                                    whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono, monospace)'
+                                }}>
+                                    {selectedSkillContent}
+                                </pre>
+                            ) : (
+                                <div className="markdown-body" style={{ color: 'var(--text, #eee)', fontSize: 14, lineHeight: 1.6 }}>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {selectedSkillContent}
+                                    </ReactMarkdown>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

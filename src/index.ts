@@ -5,6 +5,8 @@ import { DaemonServer } from './core/daemon/server.js';
 import { WorkspaceManager } from './core/workspace/manager.js';
 import { SessionManager } from './core/session/manager.js';
 import { exportReplay, loadReplay } from './core/session/replay.js';
+import fs from 'fs';
+import path from 'path';
 
 // ─── CLI 参数解析 ───
 
@@ -271,12 +273,14 @@ export async function runServer(port: number) {
         }
     });
 
-    daemon.on('workspace:switch', (targetPath: string, ws, msgId) => {
+    daemon.on('workspace:switch', async (targetPath: string, ws, msgId) => {
         try {
             // Hot-swap backend context
             activeWorkspace = workspaceManager.getWorkspace(targetPath);
+            await activeWorkspace.memoryStore.initialize();
             sessionManager = new SessionManager(activeWorkspace.rootPath, activeWorkspace.snapshotManager, activeWorkspace.reflectionEngine);
             engine.workspace = activeWorkspace;
+            engine.getSkillRegistry().scan(activeWorkspace.rootPath);
 
             // Load latest session or create new
             const summaries = sessionManager.listSessions();
@@ -381,13 +385,98 @@ export async function runServer(port: number) {
         }
     });
 
-    daemon.on('skill:list', (ws, msgId) => {
-        daemon.sendResponse(ws, msgId, {
-            skills: [
-                { name: 'code-review', status: 'Active', desc: 'Review code with best practices' },
-                { name: 'deep-research', status: 'Active', desc: 'Multi-step web research agent' }
-            ]
-        });
+    daemon.on('skill:list', async (ws, msgId) => {
+        try {
+            await activeWorkspace.memoryStore.initialize();
+            // Try DB first; fallback to in-memory registry
+            let skills = await activeWorkspace.memoryStore.getAllSkills();
+            if (skills.length === 0) {
+                // First use — populate from registry scan
+                const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
+                if (scanned.length > 0) {
+                    await activeWorkspace.memoryStore.syncSkills(scanned);
+                    skills = await activeWorkspace.memoryStore.getAllSkills();
+                }
+            }
+            daemon.sendResponse(ws, msgId, { skills });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { skills: [], error: err.message });
+        }
+    });
+
+    daemon.on('skill:search', async (params: any, ws, msgId) => {
+        try {
+            await activeWorkspace.memoryStore.initialize();
+            const skills = await activeWorkspace.memoryStore.searchSkills(params.query || '');
+            daemon.sendResponse(ws, msgId, { skills });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { skills: [], error: err.message });
+        }
+    });
+
+    daemon.on('skill:refresh', async (ws, msgId) => {
+        try {
+            await activeWorkspace.memoryStore.initialize();
+            const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
+            await activeWorkspace.memoryStore.syncSkills(scanned);
+            const skills = await activeWorkspace.memoryStore.getAllSkills();
+            daemon.sendResponse(ws, msgId, { skills, refreshed: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { skills: [], error: err.message });
+        }
+    });
+
+    daemon.on('skill:read', async (params: any, ws, msgId) => {
+        try {
+            const filePath = params.filePath;
+            if (!filePath) {
+                return daemon.sendResponse(ws, msgId, { success: false, error: 'filePath is required' });
+            }
+            const content = await fs.promises.readFile(filePath, 'utf-8');
+            daemon.sendResponse(ws, msgId, { success: true, content });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('skill:write', async (params: any, ws, msgId) => {
+        try {
+            const { filePath, content } = params;
+            if (!filePath || typeof content !== 'string') {
+                return daemon.sendResponse(ws, msgId, { success: false, error: 'filePath and content are required' });
+            }
+            // Write to file
+            await fs.promises.writeFile(filePath, content, 'utf-8');
+
+            // Force refresh registry & db to keep metadata in sync
+            const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
+            await activeWorkspace.memoryStore.syncSkills(scanned);
+
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('skill:delete', async (params: any, ws, msgId) => {
+        try {
+            const { filePath } = params;
+            if (!filePath) {
+                return daemon.sendResponse(ws, msgId, { success: false, error: 'filePath is required' });
+            }
+
+            // Skill is a directory containing SKILL.md
+            const skillDir = path.dirname(filePath);
+            await fs.promises.rm(skillDir, { recursive: true, force: true });
+
+            // Force refresh registry & db to keep metadata in sync
+            const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
+            await activeWorkspace.memoryStore.syncSkills(scanned);
+
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
     });
 
     daemon.on('mcp:list', (ws, msgId) => {

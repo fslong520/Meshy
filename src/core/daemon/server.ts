@@ -277,6 +277,31 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'skill:search': {
+                this.emit('skill:search', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'skill:refresh': {
+                this.emit('skill:refresh', ws, msg.id);
+                break;
+            }
+
+            case 'skill:read': {
+                this.emit('skill:read', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'skill:write': {
+                this.emit('skill:write', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'skill:delete': {
+                this.emit('skill:delete', msg.params, ws, msg.id);
+                break;
+            }
+
             case 'mcp:list': {
                 this.emit('mcp:list', ws, msg.id);
                 break;

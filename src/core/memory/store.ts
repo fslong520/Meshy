@@ -61,8 +61,17 @@ export class MemoryStore {
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )`,
+            `CREATE TABLE IF NOT EXISTS skills (
+                name TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                source TEXT NOT NULL DEFAULT 'project',
+                file_path TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )`,
             `CREATE INDEX IF NOT EXISTS idx_capsules_category ON capsules(category)`,
             `CREATE INDEX IF NOT EXISTS idx_capsules_session ON capsules(session_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_skills_source ON skills(source)`,
             // Note: Creating a Vector Index `CREATE INDEX idx_embedding ON capsules (libsql_vector_idx(embedding));`
             // is optional for exact brute-force search if rows are small.
         ]);
@@ -240,6 +249,77 @@ export class MemoryStore {
 
     public async updateUserProfile(content: string): Promise<void> {
         await this.setPreference('user_profile_system_prompt', content);
+    }
+
+    // ═══════════════════════════════════════════
+    // Skills — 技能索引持久化
+    // ═══════════════════════════════════════════
+
+    /**
+     * 全量同步技能列表到 DB（DELETE + INSERT 事务）。
+     * 用于刷新后将最新的 SkillRegistry 数据持久化。
+     */
+    public async syncSkills(skills: Array<{
+        name: string; description: string; keywords: string[];
+        source: string; filePath: string;
+    }>): Promise<void> {
+        const stmts: string[] = [`DELETE FROM skills`];
+
+        for (const s of skills) {
+            const kw = JSON.stringify(s.keywords);
+            // Escape single quotes for SQL
+            const escapeSql = (v: string) => v.replace(/'/g, "''");
+            stmts.push(
+                `INSERT INTO skills (name, description, keywords, source, file_path, updated_at) ` +
+                `VALUES ('${escapeSql(s.name)}', '${escapeSql(s.description)}', '${escapeSql(kw)}', ` +
+                `'${escapeSql(s.source)}', '${escapeSql(s.filePath)}', datetime('now'))`
+            );
+        }
+
+        await this.client.batch(stmts);
+    }
+
+    /**
+     * 关键词搜索技能（LIKE 匹配 name / description / keywords）。
+     */
+    public async searchSkills(query: string, limit: number = 20): Promise<Array<{
+        name: string; description: string; keywords: string[];
+        source: string; filePath: string;
+    }>> {
+        const pattern = `%${query}%`;
+        const result = await this.client.execute({
+            sql: `SELECT name, description, keywords, source, file_path FROM skills
+                  WHERE name LIKE ? OR description LIKE ? OR keywords LIKE ?
+                  ORDER BY name LIMIT ?`,
+            args: [pattern, pattern, pattern, limit],
+        });
+        return result.rows.map(this.rowToSkill);
+    }
+
+    /**
+     * 获取全部已持久化的技能列表。
+     */
+    public async getAllSkills(): Promise<Array<{
+        name: string; description: string; keywords: string[];
+        source: string; filePath: string;
+    }>> {
+        const result = await this.client.execute(
+            `SELECT name, description, keywords, source, file_path FROM skills ORDER BY source, name`
+        );
+        return result.rows.map(this.rowToSkill);
+    }
+
+    private rowToSkill(row: Record<string, unknown>): {
+        name: string; description: string; keywords: string[];
+        source: string; filePath: string;
+    } {
+        return {
+            name: String(row.name),
+            description: String(row.description || ''),
+            keywords: JSON.parse(String(row.keywords || '[]')),
+            source: String(row.source),
+            filePath: String(row.file_path),
+        };
     }
 
     // ═══════════════════════════════════════════

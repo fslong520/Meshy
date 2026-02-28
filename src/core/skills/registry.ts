@@ -2,14 +2,16 @@
  * Skill Parser — Markdown 驱动的技能树解析器
  *
  * 职责：
- * 1. 扫描 `.agent/skills/` 目录下的所有 SKILL.md 文件
+ * 1. 扫描全局 (`~/.meshy/skills/`) 和项目 (`.agent/skills/`) 目录下的所有 SKILL.md
  * 2. 解析 YAML-like Frontmatter 提取结构化元数据（名称、描述、工具 Schema）
  * 3. 在内存中构建轻量级 Raw 索引，供 Router 和惰性注入器快速检索
  * 4. 按需读取完整的 Markdown Body 作为 Agent 的 System Prompt 片段
+ * 5. 支持 refreshAll() 全量重扫并返回可序列化列表供 DB 持久化
  */
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 // ─── 技能元数据 ───
 export interface SkillMeta {
@@ -19,6 +21,8 @@ export interface SkillMeta {
     tools?: SkillToolSchema[];
     /** SKILL.md 文件完整路径 */
     filePath: string;
+    /** 技能来源：global = ~/.meshy/skills/, project = .agent/skills/ */
+    source: 'global' | 'project';
 }
 
 export interface SkillToolSchema {
@@ -76,47 +80,77 @@ function parseFrontmatter(content: string): { meta: Record<string, unknown>; bod
 /**
  * SkillRegistry — 技能注册表
  *
- * 在启动时扫描 `.agent/skills/` 目录树，解析所有 SKILL.md，
- * 在内存中维护一份轻量级索引。
+ * 在启动时扫描全局 + 项目 `.agent/skills/` 目录树，解析所有 SKILL.md，
+ * 在内存中维护一份轻量级索引。项目技能优先级高于全局技能（同名覆盖）。
  */
 export class SkillRegistry {
     private skills: Map<string, SkillMeta> = new Map();
     private bodyCache: Map<string, string> = new Map();
-    private skillsDir: string;
+    private globalSkillsDir: string;
 
-    constructor(workspaceRoot: string = process.cwd()) {
-        this.skillsDir = path.join(workspaceRoot, '.agent', 'skills');
+    constructor() {
+        this.globalSkillsDir = path.join(os.homedir(), '.meshy', 'skills');
     }
 
     /**
-     * 扫描 .agent/skills/ 目录，自动发现并注册所有技能。
+     * 扫描全局 + 项目目录，自动发现并注册所有技能。
+     * 项目技能优先级高于全局技能（同名时覆盖）。
      */
-    public scan(): void {
-        if (!fs.existsSync(this.skillsDir)) {
-            return; // 目录不存在则静默跳过
+    public scan(workspaceRoot?: string): void {
+        this.scanDirectory(this.globalSkillsDir, 'global');
+        if (workspaceRoot) {
+            const projectDir = path.join(workspaceRoot, '.agent', 'skills');
+            this.scanDirectory(projectDir, 'project');
+        }
+    }
+
+    /**
+     * 清空缓存并重新扫描所有目录，返回最新的完整列表。
+     */
+    public refreshAll(workspaceRoot?: string): SkillMeta[] {
+        this.skills.clear();
+        this.bodyCache.clear();
+        this.scan(workspaceRoot);
+        return this.listSkills();
+    }
+
+    /**
+     * 扫描指定目录下的所有 SKILL.md 文件。
+     */
+    private scanDirectory(dir: string, source: 'global' | 'project'): void {
+        console.log(`[SkillRegistry] Scanning ${source} skills in: ${dir}`);
+        if (!fs.existsSync(dir)) {
+            console.log(`[SkillRegistry] Directory does not exist: ${dir}`);
+            return;
         }
 
-        const entries = fs.readdirSync(this.skillsDir, { withFileTypes: true });
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        console.log(`[SkillRegistry] Found ${entries.length} entries in ${dir}`);
 
         for (const entry of entries) {
             if (!entry.isDirectory()) continue;
 
-            const skillFile = path.join(this.skillsDir, entry.name, 'SKILL.md');
+            const skillFile = path.join(dir, entry.name, 'SKILL.md');
             if (!fs.existsSync(skillFile)) continue;
 
-            const raw = fs.readFileSync(skillFile, 'utf8');
-            const { meta, body } = parseFrontmatter(raw);
+            try {
+                const raw = fs.readFileSync(skillFile, 'utf8');
+                const { meta, body } = parseFrontmatter(raw);
 
-            const skillMeta: SkillMeta = {
-                name: (meta.name as string) || entry.name,
-                description: (meta.description as string) || '',
-                keywords: (meta.keywords as string[]) || [],
-                tools: (meta.tools as SkillToolSchema[]) || undefined,
-                filePath: skillFile,
-            };
+                const skillMeta: SkillMeta = {
+                    name: (meta.name as string) || entry.name,
+                    description: (meta.description as string) || '',
+                    keywords: (meta.keywords as string[]) || [],
+                    tools: (meta.tools as SkillToolSchema[]) || undefined,
+                    filePath: skillFile,
+                    source,
+                };
 
-            this.skills.set(skillMeta.name, skillMeta);
-            this.bodyCache.set(skillMeta.name, body);
+                this.skills.set(skillMeta.name, skillMeta);
+                this.bodyCache.set(skillMeta.name, body);
+            } catch (err) {
+                console.warn(`[SkillRegistry] Failed to parse ${skillFile}:`, err);
+            }
         }
     }
 

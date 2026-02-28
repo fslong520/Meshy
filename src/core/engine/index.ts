@@ -56,6 +56,11 @@ export class TaskEngine {
     // Phase 2 组件
     private router: IntentRouter;
     private skillRegistry: SkillRegistry;
+
+    /** 暴露 SkillRegistry 供外部 RPC 调用。 */
+    public getSkillRegistry(): SkillRegistry {
+        return this.skillRegistry;
+    }
     private subagentRegistry: SubagentRegistry;
     private injector: LazyInjector;
 
@@ -98,12 +103,12 @@ export class TaskEngine {
         // Phase 2 init
         this.router = new IntentRouter(this.providerResolver);
         this.skillRegistry = new SkillRegistry();
+        this.skillRegistry.scan(workspace.rootPath);
         this.subagentRegistry = new SubagentRegistry();
         this.toolRegistry = createDefaultRegistry();
 
         const toolPackRegistry = createDefaultToolPackRegistry();
         this.injector = new LazyInjector(this.skillRegistry, this.subagentRegistry, this.toolRegistry, toolPackRegistry);
-        this.skillRegistry.scan();
         this.subagentRegistry.scan();
 
         // Phase 15: Custom Commands
