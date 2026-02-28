@@ -392,10 +392,56 @@ export async function runServer(port: number) {
 
     daemon.on('mcp:list', (ws, msgId) => {
         daemon.sendResponse(ws, msgId, {
-            servers: [
-                { name: 'filesystem', status: 'Connected', desc: 'Local file operations' }
-            ]
+            servers: activeWorkspace.mcpHost.getServerList(),
         });
+    });
+
+    daemon.on('mcp:create', (params: any, ws, msgId) => {
+        try {
+            activeWorkspace.mcpHost.addServer(params.config);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                servers: activeWorkspace.mcpHost.getServerList(),
+            });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('mcp:update', (params: any, ws, msgId) => {
+        try {
+            activeWorkspace.mcpHost.updateServer(params.name, params.config);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                servers: activeWorkspace.mcpHost.getServerList(),
+            });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('mcp:delete', (params: any, ws, msgId) => {
+        try {
+            activeWorkspace.mcpHost.removeServer(params.name);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                servers: activeWorkspace.mcpHost.getServerList(),
+            });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('mcp:toggle', async (params: any, ws, msgId) => {
+        try {
+            await activeWorkspace.mcpHost.toggleServer(params.name, params.enabled);
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                servers: activeWorkspace.mcpHost.getServerList(),
+            });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
     });
 
     daemon.on('ritual:status', (ws, msgId) => {

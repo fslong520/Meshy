@@ -21,16 +21,22 @@ import { StandardTool } from '../llm/provider.js';
 export interface McpServerConfig {
     /** 服务名称（唯一标识） */
     name: string;
-    /** 启动命令 */
-    command: string;
-    /** 启动参数 */
+    /** 传输类型：local = stdio 子进程，remote = SSE/HTTP */
+    type?: 'local' | 'remote';
+    /** 启动命令（local 模式） */
+    command?: string;
+    /** 启动参数（local 模式） */
     args?: string[];
+    /** 远程 MCP Server URL（remote 模式，如 http://localhost:3001/mcp） */
+    url?: string;
     /** 环境变量 */
     env?: Record<string, string>;
     /** 描述信息 */
     description?: string;
     /** 是否在启动时自动拉起（默认 false，实现惰性启动） */
     autoStart?: boolean;
+    /** 是否启用（默认 true） */
+    enabled?: boolean;
 }
 
 // ─── MCP 工具描述（来自 Server 的 tools/list 响应） ───
@@ -46,6 +52,17 @@ interface McpServerInstance {
     process: ChildProcess | null;
     tools: McpToolDefinition[];
     status: 'stopped' | 'starting' | 'running' | 'error';
+    enabled: boolean;
+}
+
+/** UI 向前端暴露的 MCP Server 信息 */
+export interface McpServerInfo {
+    name: string;
+    description: string;
+    status: string;
+    enabled: boolean;
+    toolsCount: number;
+    config: McpServerConfig;
 }
 
 // ─── JSON-RPC 2.0 消息 ───
@@ -89,6 +106,7 @@ export class McpHostRuntime {
                     process: null,
                     tools: [],
                     status: 'stopped',
+                    enabled: config.enabled !== false, // 默认 true
                 });
             }
 
@@ -115,7 +133,7 @@ export class McpHostRuntime {
     public async ensureAutoStartServers(): Promise<void> {
         const promises: Promise<void>[] = [];
         for (const [name, instance] of this.servers) {
-            if (instance.config.autoStart && instance.status !== 'running') {
+            if (instance.enabled && instance.config.autoStart && instance.status !== 'running') {
                 promises.push(this.startServer(name).catch(err => {
                     console.error(`[MCP] Failed to auto-start server ${name}:`, err);
                 }));
@@ -126,6 +144,7 @@ export class McpHostRuntime {
 
     /**
      * 启动指定的 MCP Server 子进程，通过 stdio 通信。
+     * 注意：remote 类型的 Server 不使用子进程，当前暂不支持自动连接。
      */
     public async startServer(name: string): Promise<void> {
         const instance = this.servers.get(name);
@@ -135,9 +154,22 @@ export class McpHostRuntime {
 
         if (instance.status === 'running') return;
 
+        // Remote 类型暂不支持自动启动（需未来实现 SSE/HTTP 客户端）
+        if (instance.config.type === 'remote') {
+            console.log(`[MCP:${name}] Remote server — manual connection required (url: ${instance.config.url || 'not set'})`);
+            instance.status = 'stopped';
+            return;
+        }
+
+        // Local 类型必须有 command
+        const command = instance.config.command;
+        if (!command) {
+            throw new Error(`MCP Server "${name}" is local but has no command configured.`);
+        }
+
         instance.status = 'starting';
 
-        const childProcess = spawn(instance.config.command, instance.config.args || [], {
+        const childProcess = spawn(command, instance.config.args || [], {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: { ...process.env, ...instance.config.env },
             cwd: this.workspaceRoot,
@@ -145,12 +177,12 @@ export class McpHostRuntime {
 
         instance.process = childProcess;
 
-        childProcess.on('error', (err) => {
+        childProcess.on('error', (err: Error) => {
             console.error(`[MCP:${name}] Process error:`, err.message);
             instance.status = 'error';
         });
 
-        childProcess.on('exit', (code) => {
+        childProcess.on('exit', (code: number | null) => {
             console.log(`[MCP:${name}] Process exited with code ${code}`);
             instance.status = 'stopped';
             instance.process = null;
@@ -211,6 +243,141 @@ export class McpHostRuntime {
             description: s.config.description || '',
             status: s.status,
         }));
+    }
+
+    // ═══════════════════════════════════════════
+    // Management — 配置管理 CRUD
+    // ═══════════════════════════════════════════
+
+    /**
+     * 获取所有 MCP Server 的完整信息，供 UI 列表展示。
+     */
+    public getServerList(): McpServerInfo[] {
+        return Array.from(this.servers.values()).map(s => ({
+            name: s.config.name,
+            description: s.config.description || '',
+            status: s.enabled ? s.status : 'disabled',
+            enabled: s.enabled,
+            toolsCount: s.tools.length,
+            config: s.config,
+        }));
+    }
+
+    /**
+     * 添加一个新的 MCP Server 配置并持久化到 `.agent/mcp.json`。
+     * 若 `enabled` 字段未传入，默认为 true。
+     */
+    public addServer(config: McpServerConfig): void {
+        if (this.servers.has(config.name)) {
+            throw new Error(`MCP Server "${config.name}" already exists.`);
+        }
+
+        const enabled = config.enabled !== false;
+        this.servers.set(config.name, {
+            config: { ...config, enabled },
+            process: null,
+            tools: [],
+            status: 'stopped',
+            enabled,
+        });
+
+        this.saveConfig();
+        console.log(`[MCP] Added server: ${config.name} (type=${config.type || 'local'})`);
+    }
+
+    /**
+     * 更新已有 MCP Server 的配置。
+     * 如果 Server 正在运行，先停止再更新。
+     */
+    public updateServer(name: string, newConfig: McpServerConfig): void {
+        const instance = this.servers.get(name);
+        if (!instance) {
+            throw new Error(`MCP Server "${name}" not found.`);
+        }
+
+        // 如果正在运行，先停止
+        if (instance.status === 'running') {
+            this.stopServer(name);
+        }
+
+        // 如果改名，删除旧的再设新的
+        if (newConfig.name !== name) {
+            this.servers.delete(name);
+        }
+
+        const enabled = newConfig.enabled !== false;
+        this.servers.set(newConfig.name, {
+            config: { ...newConfig, enabled },
+            process: null,
+            tools: [],
+            status: 'stopped',
+            enabled,
+        });
+
+        this.saveConfig();
+        console.log(`[MCP] Updated server: ${name} -> ${newConfig.name}`);
+    }
+
+    /**
+     * 移除 MCP Server 配置并持久化。
+     * 如果 Server 正在运行，先停止。
+     */
+    public removeServer(name: string): void {
+        const instance = this.servers.get(name);
+        if (!instance) {
+            throw new Error(`MCP Server "${name}" not found.`);
+        }
+
+        if (instance.status === 'running') {
+            this.stopServer(name);
+        }
+
+        this.servers.delete(name);
+        this.saveConfig();
+        console.log(`[MCP] Removed server: ${name}`);
+    }
+
+    /**
+     * 启用或禁用 MCP Server。
+     * enabled=true  → 将状态设为 stopped（可被后续 startServer 拉起）
+     * enabled=false → 停止运行中的进程并标记为 disabled
+     */
+    public async toggleServer(name: string, enabled: boolean): Promise<void> {
+        const instance = this.servers.get(name);
+        if (!instance) {
+            throw new Error(`MCP Server "${name}" not found.`);
+        }
+
+        instance.enabled = enabled;
+        instance.config.enabled = enabled;
+
+        if (!enabled && instance.status === 'running') {
+            this.stopServer(name);
+        }
+
+        if (enabled && instance.config.autoStart && instance.status !== 'running') {
+            await this.startServer(name).catch(err => {
+                console.error(`[MCP] Failed to start server ${name} after enable:`, err);
+            });
+        }
+
+        this.saveConfig();
+        console.log(`[MCP] ${name} ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    /**
+     * 将当前内存中的 Server 配置序列化到 `.agent/mcp.json`。
+     */
+    public saveConfig(): void {
+        const configPath = path.join(this.workspaceRoot, '.agent', 'mcp.json');
+        const dir = path.dirname(configPath);
+
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        const configs = Array.from(this.servers.values()).map(s => s.config);
+        fs.writeFileSync(configPath, JSON.stringify(configs, null, 2), 'utf8');
     }
 
     /**

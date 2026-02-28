@@ -282,6 +282,26 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'mcp:create': {
+                this.emit('mcp:create', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'mcp:update': {
+                this.emit('mcp:update', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'mcp:delete': {
+                this.emit('mcp:delete', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'mcp:toggle': {
+                this.emit('mcp:toggle', msg.params, ws, msg.id);
+                break;
+            }
+
             case 'ritual:status': {
                 this.emit('ritual:status', ws, msg.id);
                 break;
