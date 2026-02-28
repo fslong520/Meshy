@@ -163,4 +163,94 @@ export class SessionManager {
             console.warn(`[SessionManager] Reflection failed (non-critical):`, err);
         }
     }
+
+    /**
+     * Delete a session and its associated files.
+     */
+    public async deleteSession(sessionId: string, memoryStore?: any): Promise<void> {
+        const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
+        const jsonPath = path.join(this.sessionsDir, `${sessionId}.json`);
+
+        if (fs.existsSync(jsonlPath)) {
+            await fs.promises.unlink(jsonlPath);
+        } else if (fs.existsSync(jsonPath)) {
+            await fs.promises.unlink(jsonPath);
+        } else {
+            throw new Error(`Session ${sessionId} not found`);
+        }
+
+        if (memoryStore) {
+            try {
+                // Delete from DB if supported (future proofing)
+                const sql = `DELETE FROM capsules WHERE session_id = ?`;
+                await memoryStore.client?.execute({ sql, args: [sessionId] });
+            } catch (err) {
+                console.warn(`[SessionManager] Failed to delete session ${sessionId} from DB:`, err);
+            }
+        }
+        console.log(`[SessionManager] Session "${sessionId}" deleted.`);
+    }
+
+    /**
+     * Rename a session's title.
+     */
+    public renameSession(sessionId: string, newTitle: string): Session {
+        const session = this.resumeSession(sessionId);
+        if (!session) {
+            throw new Error(`Session ${sessionId} not found for renaming`);
+        }
+        session.title = newTitle;
+        session.updatedAt = new Date().toISOString();
+        this.snapshotManager.snapshot(session);
+        console.log(`[SessionManager] Session "${sessionId}" renamed to "${newTitle}".`);
+        return session;
+    }
+
+    /**
+     * Compact a session's history to save tokens.
+     */
+    public compactSession(sessionId: string): Session {
+        const session = this.resumeSession(sessionId);
+        if (!session) {
+            throw new Error(`Session ${sessionId} not found for compacting`);
+        }
+
+        // Advanced compaction logic: Keep system prompt, first user message, and last N messages
+        if (session.history.length > 5) {
+            const systemMessages = session.history.filter(m => m.role === 'system');
+            const userMessages = session.history.filter(m => m.role === 'user');
+            const firstUserMessage = userMessages.length > 0 ? userMessages[0] : null;
+
+            // Keep the last 4 messages (which could be user/assistant/tool)
+            const recentMessages = session.history.slice(-4);
+
+            // Reconstruct timeline
+            const compacted = [...systemMessages];
+            if (firstUserMessage && !recentMessages.includes(firstUserMessage)) {
+                compacted.push(firstUserMessage);
+                // Add a summary message to indicate compaction
+                compacted.push({
+                    role: 'assistant',
+                    content: '[System Note: Previous conversation history has been compacted to save context window]'
+                });
+            }
+
+            // Add recent messages, avoiding duplicates if they overlap with system/first messages
+            for (const msg of recentMessages) {
+                // simple deduplication based on object ref
+                if (!compacted.includes(msg)) {
+                    compacted.push(msg);
+                }
+            }
+
+            session.history = compacted;
+            session.updatedAt = new Date().toISOString();
+            this.snapshotManager.snapshot(session);
+            console.log(`[SessionManager] Session "${sessionId}" compacted. Messages reduced to ${session.history.length}.`);
+        } else {
+            console.log(`[SessionManager] Session "${sessionId}" is already small enough (${session.history.length} msgs). Compaction skipped.`);
+        }
+
+        return session;
+    }
 }

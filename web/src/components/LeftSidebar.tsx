@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { sendRpc } from '../store/ws'
+import { sendRpc, useEvent } from '../store/ws'
 import { Settings, Plus, MessageSquare } from 'lucide-react'
 
 interface SessionInfo {
@@ -13,12 +13,13 @@ interface SessionInfo {
 
 interface Props {
     connected: boolean;
-    onSessionSwitch?: (sessionId: string) => void;
+    activeSessionId: string | null;
+    onSessionSwitch?: (sessionId: string, title?: string) => void;
 }
 
-export function LeftSidebar({ connected, onSessionSwitch }: Props) {
+export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Props) {
     const [sessions, setSessions] = useState<SessionInfo[]>([])
-    const [activeSession, setActiveSession] = useState<string | null>(null)
+    // Removed local activeSession state
     const [workspaces, setWorkspaces] = useState<string[]>([])
     const [activeWorkspace, setActiveWorkspace] = useState<string>('')
 
@@ -46,25 +47,37 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
         refreshWorkspaces()
     }, [refreshSessions, refreshWorkspaces])
 
+    // Global listener for session changes (deletion, renaming, etc.)
+    useEvent('session:list', (msg: any) => {
+        const data = msg.data as { sessions: SessionInfo[] }
+        if (data?.sessions) {
+            setSessions(data.sessions)
+        }
+    })
+
     const handleNewSession = useCallback(() => {
         sendRpc<{ sessionId: string; sessions: SessionInfo[] }>('session:create').then((res) => {
             if (res) {
-                setActiveSession(res.sessionId)
                 setSessions(res.sessions)
                 onSessionSwitch?.(res.sessionId)
             }
         })
     }, [onSessionSwitch])
 
-    const handleSwitchSession = useCallback((sessionId: string) => {
-        setActiveSession(sessionId)
-        onSessionSwitch?.(sessionId)
+    const handleSwitchSession = useCallback((sessionId: string, title?: string) => {
+        onSessionSwitch?.(sessionId, title)
     }, [onSessionSwitch])
 
     const formatTime = (iso: string) => {
         if (!iso || iso === 'unknown') return ''
         try {
-            return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            const date = new Date(iso)
+            const y = date.getFullYear()
+            const m = String(date.getMonth() + 1).padStart(2, '0')
+            const d = String(date.getDate()).padStart(2, '0')
+            const hh = String(date.getHours()).padStart(2, '0')
+            const mm = String(date.getMinutes()).padStart(2, '0')
+            return `${y}-${m}-${d} ${hh}:${mm}`
         } catch { return '' }
     }
 
@@ -88,9 +101,8 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
         const res = await sendRpc<{ success: boolean; sessionId: string; error?: string }>('workspace:switch', { targetPath: val })
         if (res.success) {
             setActiveWorkspace(val)
-            setActiveSession(res.sessionId)
             refreshSessions()
-            onSessionSwitch?.(res.sessionId) // Triggers ChatPanel reset
+            onSessionSwitch?.(res.sessionId) // Triggers App to update activeSessionId
         } else {
             alert(`Failed to switch workspace: ${res.error}`)
         }
@@ -107,11 +119,7 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
             {/* Workspace */}
             <div className="sidebar-section">
                 <div className="sidebar-section-title">Workspace</div>
-                <select value={activeWorkspace} onChange={handleWorkspaceChange} style={{
-                    width: '100%', padding: '6px', fontSize: '13px', background: 'var(--bg-subtle)',
-                    color: 'var(--text-main)', border: '1px solid var(--border-color)', borderRadius: '4px',
-                    wordBreak: 'break-all'
-                }}>
+                <select value={activeWorkspace} onChange={handleWorkspaceChange}>
                     <option value="" disabled>Select a Workspace</option>
                     {workspaces.map(w => (
                         <option key={w} value={w}>{w}</option>
@@ -133,17 +141,17 @@ export function LeftSidebar({ connected, onSessionSwitch }: Props) {
                 {sessions.map((s) => (
                     <div
                         key={s.id}
-                        className={`session-item ${activeSession === s.id ? 'active' : ''}`}
-                        onClick={() => handleSwitchSession(s.id)}
-                        title={`${s.title || s.goal || s.id}\n${s.messageCount} messages • ${s.status}`}
+                        className={`session-item ${activeSessionId === s.id ? 'active' : ''}`}
+                        onClick={() => handleSwitchSession(s.id, s.title)}
+                        title={`${s.title || s.goal || s.id}\n${formatTime(s.updatedAt)}`}
                     >
                         <MessageSquare size={14} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div className="session-item-content">
+                            <div className="session-item-title">
                                 {s.title ? s.title : (s.goal && s.goal !== '(no goal)' ? s.goal : s.id.slice(0, 12) + '...')}
                             </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                {s.messageCount} msgs • {formatTime(s.updatedAt)}
+                            <div className="session-item-date">
+                                {formatTime(s.updatedAt)}
                             </div>
                         </div>
                     </div>

@@ -362,6 +362,74 @@ export async function runServer(port: number) {
         }
     });
 
+    daemon.on('session:delete', async (params: any, ws: import('ws').WebSocket, msgId: string) => {
+        try {
+            const { id } = params;
+            if (!id) throw new Error('Session ID is required');
+            await sessionManager.deleteSession(id, activeWorkspace.memoryStore);
+
+            // If deleting active session, reset reference but don't auto-create one
+            if (session.id === id) {
+                // Return no activeSessionId so UI knows it's empty
+            }
+
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                sessions: sessionManager.listSessions(),
+                activeSessionId: (session.id === id) ? null : session.id
+            });
+            // Update all connected clients' sidebars
+            daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('session:rename', (params: any, ws: import('ws').WebSocket, msgId: string) => {
+        try {
+            const { id, title } = params;
+            if (!id || !title) throw new Error('Session ID and title are required');
+
+            const updated = sessionManager.renameSession(id, title);
+
+            // If modifying active session, update in-memory ref
+            if (session.id === id) {
+                session = updated;
+            }
+
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                sessions: sessionManager.listSessions(),
+                replay: exportReplay(updated)
+            });
+            // Update all connected clients' sidebars
+            daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('session:compact', (params: any, ws: import('ws').WebSocket, msgId: string) => {
+        try {
+            const { id } = params;
+            if (!id) throw new Error('Session ID is required');
+
+            const updated = sessionManager.compactSession(id);
+
+            // If modifying active session, update in-memory ref
+            if (session.id === id) {
+                session = updated;
+            }
+
+            daemon.sendResponse(ws, msgId, {
+                success: true,
+                replay: exportReplay(updated)
+            });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
     // Dashboard RPCs
     daemon.on('blackboard:get', (ws, msgId) => {
         daemon.sendResponse(ws, msgId, session.blackboard);

@@ -104,6 +104,7 @@ function App() {
   const [bbGoal, setBbGoal] = useState('')
   const [bbTasks, setBbTasks] = useState<Array<{ id: string; description: string; status: string }>>([])
   const [agentStreaming, setAgentStreaming] = useState(false)
+  const [activeSession, setActiveSession] = useState<{ id: string; title?: string } | null>(null)
 
   // 接收 Agent 流式文本
   useEvent('agent:text', (msg: RpcMessage) => {
@@ -262,7 +263,8 @@ function App() {
   }, [])
 
   // Session 切换：加载历史消息
-  const handleSessionSwitch = useCallback((sessionId: string) => {
+  const handleSessionSwitch = useCallback((sessionId: string, title?: string) => {
+    setActiveSession({ id: sessionId, title })
     sendRpc<{ success: boolean; replay?: ReplayExport }>('session:switch', { sessionId }).then((res) => {
       if (res?.success && res.replay) {
         const historicalMessages = replayToMessages(res.replay)
@@ -278,11 +280,48 @@ function App() {
     })
   }, [])
 
+  const handleSessionAction = useCallback((action: 'rename' | 'delete' | 'compact', payload?: any) => {
+    if (!activeSession) return
+
+    if (action === 'delete') {
+      sendRpc<{ success: boolean }>('session:delete', { id: activeSession.id }).then(res => {
+        if (res?.success) {
+          // LeftSidebar will auto-refresh via interval or we can trigger a refresh
+          // App.tsx doesn't manage the session list, LeftSidebar does.
+          // However we clear the screen:
+          setMessages([])
+          setActiveSession(null)
+        }
+      })
+    } else if (action === 'rename' && payload?.title) {
+      sendRpc<{ success: boolean; replay?: ReplayExport }>('session:rename', { id: activeSession.id, title: payload.title }).then(res => {
+        if (res?.success) {
+          setActiveSession(prev => prev ? { ...prev, title: payload.title } : null)
+        }
+      })
+    } else if (action === 'compact') {
+      sendRpc<{ success: boolean; replay?: ReplayExport }>('session:compact', { id: activeSession.id }).then(res => {
+        if (res?.success && res.replay) {
+          setMessages(replayToMessages(res.replay))
+        }
+      })
+    }
+  }, [activeSession])
+
   return (
     <div className="app-layout">
-      <LeftSidebar connected={connected} onSessionSwitch={handleSessionSwitch} />
+      <LeftSidebar
+        connected={connected}
+        activeSessionId={activeSession?.id || null}
+        onSessionSwitch={handleSessionSwitch}
+      />
       <div className="center-panel">
-        <ChatPanel messages={messages} onApproval={handleApproval} />
+        <ChatPanel
+          messages={messages}
+          onApproval={handleApproval}
+          activeSession={activeSession}
+          onSessionAction={handleSessionAction}
+        />
         <InputArea onSend={handleSend} disabled={agentStreaming} connected={connected} />
       </div>
       <RightPanel connected={connected} />

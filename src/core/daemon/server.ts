@@ -272,6 +272,21 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'session:delete': {
+                this.emit('session:delete', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'session:rename': {
+                this.emit('session:rename', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'session:compact': {
+                this.emit('session:compact', msg.params, ws, msg.id);
+                break;
+            }
+
             case 'skill:list': {
                 this.emit('skill:list', ws, msg.id);
                 break;

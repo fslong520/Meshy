@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { Search, ChevronUp, ChevronDown, MoreVertical, Edit2, Trash2, Minimize2 } from 'lucide-react'
 import type { ChatMessage } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -7,12 +7,35 @@ import remarkGfm from 'remark-gfm'
 interface Props {
     messages: ChatMessage[];
     onApproval: (id: string, approved: boolean) => void;
+    activeSession: { id: string; title?: string } | null;
+    onSessionAction: (action: 'rename' | 'compact' | 'delete', payload?: any) => void;
 }
 
-export function ChatPanel({ messages, onApproval }: Props) {
+export function ChatPanel({ messages, onApproval, activeSession, onSessionAction }: Props) {
     const scrollRef = useRef<HTMLDivElement>(null)
     const [searchTerm, setSearchTerm] = useState('')
     const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+
+    // Session Actions State
+    const [menuOpen, setMenuOpen] = useState(false)
+    const [isRenaming, setIsRenaming] = useState(false)
+    const [renameTitle, setRenameTitle] = useState('')
+    const menuRef = useRef<HTMLDivElement>(null)
+
+    // Handle outside click for menu
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setMenuOpen(false)
+            }
+        }
+        if (menuOpen) {
+            document.addEventListener('mousedown', handleClickOutside)
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside)
+        }
+    }, [menuOpen])
 
     // 自动滚动到底部
     useEffect(() => {
@@ -52,6 +75,14 @@ export function ChatPanel({ messages, onApproval }: Props) {
         })
     }
 
+    // 回车保存 Rename
+    const handleRenameSubmit = () => {
+        if (renameTitle.trim() && activeSession) {
+            onSessionAction('rename', { title: renameTitle.trim() })
+        }
+        setIsRenaming(false)
+    }
+
     // 搜索过滤高亮
     const highlightText = (text: string) => {
         if (!searchTerm) return text
@@ -60,7 +91,73 @@ export function ChatPanel({ messages, onApproval }: Props) {
     }
 
     return (
-        <>
+        <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            {/* Session Header */}
+            {activeSession && (
+                <div className="chat-session-header">
+                    <div className="session-header-left">
+                        {isRenaming ? (
+                            <input
+                                autoFocus
+                                type="text"
+                                className="rename-input"
+                                value={renameTitle}
+                                onChange={e => setRenameTitle(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') handleRenameSubmit()
+                                    if (e.key === 'Escape') setIsRenaming(false)
+                                }}
+                                onBlur={handleRenameSubmit}
+                            />
+                        ) : (
+                            <div className="session-title">
+                                {activeSession.title || activeSession.id}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="session-header-right" ref={menuRef}>
+                        <button
+                            className={`session-menu-trigger ${menuOpen ? 'active' : ''}`}
+                            onClick={() => setMenuOpen(!menuOpen)}
+                            title="Session options"
+                        >
+                            <MoreVertical size={20} />
+                        </button>
+
+                        {menuOpen && (
+                            <div className="dropdown-menu">
+                                <button className="menu-item" onClick={() => {
+                                    onSessionAction('compact')
+                                    setMenuOpen(false)
+                                }}>
+                                    <Minimize2 size={14} />
+                                    <span>Compact Context</span>
+                                </button>
+                                <button className="menu-item" onClick={() => {
+                                    setRenameTitle(activeSession.title || activeSession.id)
+                                    setIsRenaming(true)
+                                    setMenuOpen(false)
+                                }}>
+                                    <Edit2 size={14} />
+                                    <span>Rename Session</span>
+                                </button>
+                                <div className="menu-divider" />
+                                <button className="menu-item danger" onClick={() => {
+                                    if (confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
+                                        onSessionAction('delete')
+                                    }
+                                    setMenuOpen(false)
+                                }}>
+                                    <Trash2 size={14} />
+                                    <span>Delete Session</span>
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* 搜索栏 */}
             <div className="chat-search-bar">
                 <Search size={16} />
@@ -204,6 +301,6 @@ export function ChatPanel({ messages, onApproval }: Props) {
                     )
                 })}
             </div>
-        </>
+        </div>
     )
 }
