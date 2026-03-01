@@ -483,6 +483,26 @@ export async function runServer(port: number) {
         }
     });
 
+    daemon.on('command:list', (params: any, ws: any, msgId: string) => {
+        const builtinCommands = [
+            { name: 'ask', description: 'Ask without modifying code' },
+            { name: 'plan', description: 'Plan mode, output structured steps' },
+            { name: 'model', description: 'List providers or switch model' },
+            { name: 'session', description: 'Session management' },
+            { name: 'workflow', description: 'Workflow management' },
+            { name: 'clear', description: 'Clear current session' },
+            { name: 'undo', description: 'Roll back last edit' },
+            { name: 'test', description: 'Run tests' },
+            { name: 'compact', description: 'Compress conversation history' },
+            { name: 'feedback', description: 'Thumbs up/down for current session' },
+            { name: 'help', description: 'Show this help' },
+        ];
+        const customCommands = (engine as any).customCommands ? (engine as any).customCommands.listCommands() : [];
+        daemon.sendResponse(ws, msgId, {
+            commands: [...builtinCommands, ...customCommands]
+        });
+    });
+
     daemon.on('skill:list', async (ws, msgId) => {
         try {
             await activeWorkspace.memoryStore.initialize();

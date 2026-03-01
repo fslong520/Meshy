@@ -136,7 +136,7 @@ function parseMentions(input: string): MentionRef[] {
 
     for (const match of input.matchAll(MENTION_REGEX)) {
         const nsPrefix = match[1]; // 如 "file:" 或 undefined
-        const value = match[2];
+        const value = match[2].replace(/[.,:;!?]+$/, ''); // 去除尾部标点
         const raw = match[0].trim();
 
         let namespace: MentionNamespace;
@@ -157,7 +157,7 @@ function parseSkills(input: string): SkillRef[] {
     const results: SkillRef[] = [];
 
     for (const match of input.matchAll(SKILL_REGEX)) {
-        const value = match[1];
+        const value = match[1].replace(/[.,:;!?]+$/, '');
         const raw = match[0].trim();
         results.push({ value, raw });
     }
@@ -170,7 +170,8 @@ function parseSymbolRefs(input: string): SymbolRef[] {
     const results: SymbolRef[] = [];
 
     for (const match of input.matchAll(SYMBOL_REF_REGEX)) {
-        const value = match[1];
+        const rawValue = match[1];
+        const value = rawValue.replace(/[.,:;!?]+$/, '');
         const raw = match[0].trim();
 
         let type: SymbolRefType;

@@ -190,19 +190,21 @@ export class TaskEngine {
         command: import('../router/input-parser.js').SlashCommand,
         parsed: ParsedInput,
     ): Promise<void> {
+        let systemOutput = '';
         switch (command.type) {
             case 'clear':
                 this.session.clear();
-                console.log('[Slash] Session cleared.');
+                systemOutput = '[Slash] Session cleared.';
+                this.daemon?.broadcast('agent:session_changed', { sessionId: this.session.id });
                 break;
 
             case 'undo':
-                console.log('[Slash] Undo requested — rolling back last edit via ACI.');
+                systemOutput = '[Slash] Undo requested — rolling back last edit via ACI.';
                 // 未来可对接 git checkout / ACI 层回滚
                 break;
 
             case 'help':
-                console.log([
+                const helpLines = [
                     'Available commands:',
                     '  /ask <question>   — Ask without modifying code',
                     '  /plan <task>      — Plan mode, output structured steps',
@@ -215,15 +217,16 @@ export class TaskEngine {
                     '  /compact          — Compress conversation history',
                     '  /feedback <+|->   — Thumbs up/down for current session (triggers reflection)',
                     '  /help             — Show this help',
-                ].join('\n'));
+                ];
                 // Phase 15: 列出自定义命令
                 const customCmds = this.customCommands.listCommands();
                 if (customCmds.length > 0) {
-                    console.log('\nCustom commands (.meshy/commands/):');
+                    helpLines.push('\nCustom commands (.meshy/commands/):');
                     for (const cmd of customCmds) {
-                        console.log(`  /${cmd.name.padEnd(16)} — ${cmd.description || '(no description)'}`);
+                        helpLines.push(`  /${cmd.name.padEnd(16)} — ${cmd.description || '(no description)'}`);
                     }
                 }
+                systemOutput = helpLines.join('\n');
                 break;
 
             case 'model': {
@@ -231,20 +234,22 @@ export class TaskEngine {
                     // 列出所有可用 provider 和当前模型
                     const providers = this.providerResolver.listProviders();
                     const currentModel = this.providerResolver.getActiveDefault();
-                    console.log('\n  Current model: ' + currentModel);
-                    console.log('  Available providers:');
+                    const outLines = [];
+                    outLines.push('\n  Current model: ' + currentModel);
+                    outLines.push('  Available providers:');
                     for (const p of providers) {
                         const url = p.baseUrl ? ` (${p.baseUrl})` : ' (official)';
-                        console.log(`    • ${p.name} [${p.protocol}]${url}`);
+                        outLines.push(`    • ${p.name} [${p.protocol}]${url}`);
                     }
-                    console.log('\n  Usage: /model <providerName/modelId>');
+                    outLines.push('\n  Usage: /model <providerName/modelId>');
+                    systemOutput = outLines.join('\n');
                 } else {
                     try {
                         this.providerResolver.switchModel(command.args.trim());
-                        console.log(`[Model] Switched to: ${command.args.trim()}`);
+                        systemOutput = `[Model] Switched to: ${command.args.trim()}`;
                     } catch (err: unknown) {
                         const msg = err instanceof Error ? err.message : String(err);
-                        console.error(`[Model] Failed to switch: ${msg}`);
+                        systemOutput = `[Model] Failed to switch: ${msg}`;
                     }
                 }
                 break;
@@ -258,85 +263,119 @@ export class TaskEngine {
                     case 'list': {
                         const sessions = this.sessionManager.listSessions();
                         if (sessions.length === 0) {
-                            console.log('[Session] No sessions found.');
+                            systemOutput = '[Session] No sessions found.';
                         } else {
-                            console.log('\n  Sessions:');
+                            const outLines = ['\n  Sessions:'];
                             for (const s of sessions) {
                                 const goalLabel = s.goal ? ` — ${s.goal}` : '';
-                                console.log(`    • [${s.status.toUpperCase()}] ${s.id} (${s.messageCount} msgs, ${s.updatedAt})${goalLabel}`);
+                                outLines.push(`    • [${s.status.toUpperCase()}] ${s.id} (${s.messageCount} msgs, ${s.updatedAt})${goalLabel}`);
                             }
+                            systemOutput = outLines.join('\n');
                         }
                         break;
                     }
                     case 'save':
                         this.sessionManager.suspendSession(this.session);
-                        console.log(`[Session] Current session "${this.session.id}" has been suspended.`);
+                        systemOutput = `[Session] Current session "${this.session.id}" has been suspended.`;
                         break;
                     case 'load': {
                         const targetId = subCmd[1];
                         if (!targetId) {
-                            console.log('[Session] Usage: /session load <session-id>');
+                            systemOutput = '[Session] Usage: /session load <session-id>';
                             break;
                         }
                         const restored = this.sessionManager.resumeSession(targetId);
                         if (restored) {
                             this.session = restored;
-                            console.log(`[Session] Switched to session "${restored.id}".`);
+                            systemOutput = `[Session] Switched to session "${restored.id}".`;
+                            this.daemon?.broadcast('agent:session_changed', { sessionId: this.session.id });
                         } else {
-                            console.log(`[Session] Session "${targetId}" not found.`);
+                            systemOutput = `[Session] Session "${targetId}" not found.`;
                         }
                         break;
                     }
-                    case 'archive':
-                        await this.sessionManager.archiveSession(this.session);
-                        console.log(`[Session] Session "${this.session.id}" archived and reflection triggered.`);
+                    case 'archive': {
+                        const targetId = subCmd[1];
+                        if (!targetId) {
+                            systemOutput = '[Session] Usage: /session archive <session-id>';
+                            break;
+                        }
+                        const sToArchive = this.sessionManager.loadSession(targetId);
+                        if (sToArchive) {
+                            await this.sessionManager.archiveSession(sToArchive);
+                            systemOutput = `[Session] Session "${targetId}" archived.`;
+                        } else {
+                            systemOutput = `[Session] Session "${targetId}" not found.`;
+                        }
+                        if (targetId === this.session.id) {
+                            // If the current session is archived, broadcast a change
+                            this.daemon?.broadcast('agent:session_changed', { sessionId: 'archived' }); // Or some other indicator
+                        }
                         break;
+                    }
                     case 'replay': {
                         const replay = exportReplay(this.session);
                         const filePath = saveReplay(replay, this.workspace.rootPath);
-                        console.log(formatReplayText(replay));
-                        console.log(`\n[Session] Replay saved to: ${filePath}`);
+                        systemOutput = formatReplayText(replay);
+                        systemOutput += `\n[Session] Replay saved to: ${filePath}`;
                         break;
                     }
                     default:
-                        console.log('[Session] Unknown sub-command. Use: list, save, load <id>, archive, replay');
+                        systemOutput = `[Session] Unknown action "${action}". Use: list, save, load <id>, archive, replay`;
                 }
                 break;
             }
 
+            case 'test':
+                systemOutput = '[Slash] Running workspace tests via ACI...';
+                try {
+                    const testOut = await this.aci.terminalManager.executeCommand('npm test', 30000);
+                    systemOutput += '\n\n' + testOut;
+                } catch (e: any) {
+                    systemOutput += `\n\n[Error] ${e.message}`;
+                }
+                break;
+
+            case 'compact':
+                systemOutput = '[Slash] Triggering history compaction...';
+                await this.compactionAgent.compact(this.session);
+                systemOutput += '\nCompaction done. Reduced tokens by discarding old tool calls.';
+                break;
+
             case 'workflow': {
                 const subCmd = (command.args || '').trim().split(/\s+/);
                 const action = subCmd[0] || 'list';
-                const workflows = loadWorkflows(this.workspace.rootPath);
+                const workflows = loadWorkflows(this.workspace.rootPath); // Assuming loadWorkflows is still used
 
                 switch (action) {
                     case 'list': {
                         if (workflows.length === 0) {
-                            console.log('[Workflow] No workflows found in .meshy/workflows/');
+                            systemOutput = '[Workflow] No workflows found in .meshy/workflows/';
                         } else {
-                            console.log('\n  Available Workflows:');
+                            const wLines = ['\n  Available Workflows:'];
                             for (const wf of workflows) {
-                                console.log(`    • ${wf.name} — ${wf.description || 'No description'}`);
-                                console.log(`      Steps: ${wf.steps.map(s => s.name).join(' -> ')}`);
+                                wLines.push(`    • ${wf.name} — ${wf.description || 'No description'}`);
+                                wLines.push(`      Steps: ${wf.steps.map(s => s.name).join(' -> ')}`);
                             }
+                            systemOutput = wLines.join('\n');
                         }
                         break;
                     }
                     case 'run': {
                         const targetName = subCmd[1];
                         if (!targetName) {
-                            console.log('[Workflow] Usage: /workflow run <workflow-name>');
+                            systemOutput = '[Workflow] Usage: /workflow run <workflow-name>';
                             break;
                         }
 
                         const wf = workflows.find(w => w.name === targetName);
                         if (!wf) {
-                            console.log(`[Workflow] Workflow "${targetName}" not found.`);
+                            systemOutput = `[Workflow] Workflow "${targetName}" not found.`;
                             break;
                         }
 
                         const initialInput = command.args.replace(/^run\s+[^\s]+\s*/, '');
-                        console.log(`\n[Workflow] Starting pipeline: ${wf.name}...`);
+                        systemOutput = `[Workflow] Starting pipeline: ${wf.name}...`;
 
                         // Bridge WorkflowEngine with WorkerAgent
                         const engine = new WorkflowEngine(
@@ -382,9 +421,7 @@ export class TaskEngine {
 
             case 'ask':
             case 'plan':
-            case 'test':
             case 'summarize':
-            case 'compact':
                 // 这些命令带有参数，仍需走 LLM 流程但附带约束
                 // 将约束信息注入后走正常 runTask 路径
                 if (command.args) {
@@ -505,7 +542,7 @@ export class TaskEngine {
                     const basePrompt = builder.build();
                     const injectionParsed = InputParser.parse(renderedPrompt);
                     const injection = await this.injector.resolve(
-                        injectionParsed, decision, basePrompt, this.session, this.providerResolver,
+                        injectionParsed, decision, basePrompt, this.session, this.providerResolver, this.workspace.rootPath
                     );
 
                     // 如果命令指定了特定模型
@@ -636,7 +673,7 @@ export class TaskEngine {
             }
         }
 
-        const injection = await this.injector.resolve(parsed, decision, basePrompt, this.session, this.providerResolver);
+        const injection = await this.injector.resolve(parsed, decision, basePrompt, this.session, this.providerResolver, this.workspace.rootPath);
         if (injection.subagent) {
             console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
         }
@@ -798,7 +835,7 @@ export class TaskEngine {
                 const executionPromises = pendingToolCalls.map(async (call) => {
                     const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
                     this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
-                    const result = await this.executeTool(call.id, call.name, parsedArgs);
+                    const result = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
                     this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
                     return { id: call.id, result };
                 });
@@ -993,7 +1030,14 @@ export class TaskEngine {
         }));
     }
 
-    private async executeTool(id: string, name: string, args: Record<string, unknown>): Promise<string> {
+    private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<string> {
+        // ── Phase 2: Agent Tool Whitelist Block ──
+        if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(name)) {
+            const reason = `[BLOCKED] Agent is not allowed to use tool "${name}". Please do not use this tool anymore.`;
+            this.daemon?.broadcast('agent:error', { id, tool: name, reason });
+            return reason;
+        }
+
         // ── Phase 3: 沙盒审批网关 ──
         const actionType = name === 'readFile' ? 'read_file' : name === 'editFile' ? 'edit_file' : 'run_command';
         const detail = `${name}(${JSON.stringify(args).slice(0, 120)})`;

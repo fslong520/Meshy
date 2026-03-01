@@ -64,6 +64,7 @@ export type DaemonEventType =
     | 'agent:done'            // 任务完成
     | 'agent:error'           // 错误
     | 'agent:approve'         // Agent 请求审批
+    | 'agent:session_changed' // 会话刷新或重置
     | 'approval:request'      // 沙盒审批请求（等待人类确认）
     | 'session:update'        // Session 状态变更
     | 'workspace:list'        // 工作区列表
@@ -264,6 +265,21 @@ export class DaemonServer extends EventEmitter {
             case 'model:switch': {
                 const modelId = msg.params?.model as string;
                 this.emit('model:switch', modelId, ws, msg.id);
+                break;
+            }
+
+            case 'agent:list': {
+                this.emit('agent:list', ws, msg.id);
+                break;
+            }
+
+            case 'agent:switch': {
+                this.emit('agent:switch', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'command:list': {
+                this.emit('command:list', msg.params, ws, msg.id);
                 break;
             }
 

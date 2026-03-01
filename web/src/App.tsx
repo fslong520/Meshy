@@ -138,6 +138,19 @@ function App() {
     setAgentStreaming(false)
   })
 
+  // Session 被后端系统指令重置/切换
+  useEvent('agent:session_changed', (msg: RpcMessage) => {
+    const data = msg.data as { sessionId: string }
+    if (data.sessionId === 'archived') {
+      setMessages([])
+      setActiveSession(null)
+      setBbGoal('')
+      setBbTasks([])
+    } else {
+      handleSessionSwitch(data.sessionId)
+    }
+  })
+
   // Tool Call 通知
   useEvent('agent:tool_call', (msg: RpcMessage) => {
     const data = msg.data as { name: string; args: string; id: string }
@@ -322,14 +335,17 @@ function App() {
           activeSession={activeSession}
           onSessionAction={handleSessionAction}
         />
-        <InputArea onSend={handleSend} disabled={agentStreaming} connected={connected} />
+        <InputArea
+          onSend={handleSend}
+          disabled={agentStreaming}
+          connected={connected}
+          bbOpen={bbOpen}
+          onToggleBb={() => setBbOpen(!bbOpen)}
+        />
       </div>
       <RightPanel connected={connected} />
 
-      {/* Blackboard 浮动按钮 */}
-      <button className="bb-toggle" onClick={() => setBbOpen(!bbOpen)}>
-        📋 {bbOpen ? 'Hide' : 'Blackboard'}
-      </button>
+      {/* Blackboard Drawer (no more floating toggle – it's in InputArea toolbar) */}
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
         <h3>Blackboard</h3>
         {bbGoal ? (

@@ -20,6 +20,8 @@ import { Session } from '../session/state.js';
 import { ToolRegistry } from '../tool/registry.js';
 import { ToolPackRegistry } from '../tool/tool-pack.js';
 import { ProviderResolver } from '../llm/resolver.js';
+import fs from 'fs';
+import path from 'path';
 
 /** ToolRAG Top-K 默认值 */
 const DEFAULT_RAG_TOP_K = 8;
@@ -61,9 +63,13 @@ export class LazyInjector {
         baseSystemPrompt: string,
         session: Session,
         providerResolver: ProviderResolver,
+        workspaceRoot: string,
     ): Promise<InjectionResult> {
-        // 1. 检查是否有 @subagent 显式唤醒
+        console.log('[DEBUG] Available agents:', this.subagentRegistry.listAgents().map(a => a.name));
+        // 1. 获取目标 Agent
         let agent: SubagentConfig | null = null;
+
+        // 1.1 检查是否存在显式 @ 唤醒
         for (const m of parsed.mentions) {
             if (m.namespace === 'agent' || m.namespace === 'raw') {
                 const found = this.subagentRegistry.getAgent(m.value);
@@ -74,11 +80,15 @@ export class LazyInjector {
             }
         }
 
-        if (agent) {
-            return this.buildSubagentInjection(agent, baseSystemPrompt);
+        // 1.2 如果没有显式唤醒，采用 Session 中当前的 activeAgentId
+        if (!agent && session.activeAgentId && session.activeAgentId !== 'default') {
+            const found = this.subagentRegistry.getAgent(session.activeAgentId);
+            if (found) {
+                agent = found;
+            }
         }
 
-        // 2. 收集需要注入的技能 (Skills)
+        // 2. 收集需要注入的技能 (Skills) - 即使有了 Agent 也要注入命中的技能工具，但仅限未被拦截的
         const skillNames = new Set<string>(decision.suggestedSkills);
         for (const s of parsed.skills) {
             skillNames.add(s.value);
@@ -147,9 +157,31 @@ export class LazyInjector {
         // 写入 Session（每轮刷新）
         session.setRagTools(ragToolIds);
 
-        // 4. 组装 System Prompt 和 Skill Tools
-        const promptParts: string[] = [baseSystemPrompt, decision.systemPromptHint];
+        // 4. 组装分层 System Prompt (Base + Agent + Mode + Context + Skills)
+        const promptParts: string[] = [baseSystemPrompt];
+
+        if (agent) {
+            promptParts.push(agent.systemPrompt);
+
+            // Context 注入 (如 tech-stack)
+            if (agent.contextInject && agent.contextInject.length > 0) {
+                for (const ctx of agent.contextInject) {
+                    const ctxPath = path.join(workspaceRoot, '.meshy', 'context', `${ctx}.md`);
+                    if (fs.existsSync(ctxPath)) {
+                        const content = fs.readFileSync(ctxPath, 'utf8');
+                        promptParts.push(`\n--- Workspace Context: ${ctx} ---\n${content}`);
+                    }
+                }
+            }
+        }
+
+        if (decision.systemPromptHint) {
+            promptParts.push(decision.systemPromptHint);
+        }
+
         const tools: StandardTool[] = [];
+        const hasWhitelist = agent && agent.allowedTools && agent.allowedTools.length > 0;
+        const whitelistSet = hasWhitelist ? new Set(agent!.allowedTools) : null;
 
         // 构建可用技能的简短广告文本（不含完整 Schema，节省 Token）
         const allSkills = this.skillRegistry.listSkills();
@@ -178,61 +210,23 @@ export class LazyInjector {
 
             if (skill.tools) {
                 for (const t of skill.tools) {
-                    tools.push({
-                        name: t.name,
-                        description: t.description,
-                        inputSchema: t.inputSchema,
-                    });
+                    if (!whitelistSet || whitelistSet.has(t.name)) {
+                        tools.push({
+                            name: t.name,
+                            description: t.description,
+                            inputSchema: t.inputSchema,
+                        });
+                    }
                 }
             }
         }
+
+        // 把基础 Registry 中受白名单允许的工具注入 (虽然 session.activatedTools 决定实际执行，但 schema 组装可能需要)
+        // 实际上 LLM loop 会利用 session.activatedTools 去取 Built-in tools
+        // 但为了完整性，如果这里要完全接管的话，需要合并。暂保原样。我们用白名单阻止其调用即可。
 
         return {
             systemPrompt: promptParts.filter(Boolean).join('\n\n'),
-            tools,
-            subagent: null,
-        };
-    }
-
-    /**
-     * 构建 Subagent 专属注入结果。
-     * Subagent 有自己独立的 System Prompt 和工具白名单。
-     * 当 allowedTools 非空时，仅暴露命中白名单的工具；否则全量暴露。
-     */
-    private buildSubagentInjection(
-        agent: SubagentConfig,
-        baseSystemPrompt: string
-    ): InjectionResult {
-        const tools: StandardTool[] = [];
-
-        // 从 SkillRegistry 中加载 Subagent 白名单内的技能工具
-        for (const toolName of agent.allowedTools) {
-            const skill = this.skillRegistry.getSkill(toolName);
-            if (skill?.tools) {
-                for (const t of skill.tools) {
-                    tools.push({
-                        name: t.name,
-                        description: t.description,
-                        inputSchema: t.inputSchema,
-                    });
-                }
-            }
-        }
-
-        // 从 ToolRegistry 中按白名单筛选内置工具
-        const hasWhitelist = agent.allowedTools.length > 0;
-        const whitelistSet = new Set(agent.allowedTools);
-        const registryTools = this.toolRegistry.toStandardTools();
-
-        for (const rt of registryTools) {
-            // 白名单为空 → 全量暴露；白名单非空 → 仅暴露命中项
-            if (!hasWhitelist || whitelistSet.has(rt.name)) {
-                tools.push(rt);
-            }
-        }
-
-        return {
-            systemPrompt: `${baseSystemPrompt}\n\n${agent.systemPrompt}`,
             tools,
             subagent: agent,
         };

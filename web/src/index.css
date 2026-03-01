@@ -749,6 +749,7 @@ option {
 
 /* ─── Input Area ─── */
 .input-area {
+  position: relative;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
   padding: 10px 16px 14px;
@@ -967,34 +968,85 @@ option {
   letter-spacing: 0.02em;
 }
 
+/* ─── Omnibar Command Palette ─── */
+.omnibar-popover {
+  position: absolute;
+  bottom: 100%;
+  left: 10px;
+  right: 10px;
+  max-width: 420px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25);
+  margin-bottom: 6px;
+  z-index: 200;
+  max-height: 260px;
+  overflow-y: auto;
+  backdrop-filter: blur(16px);
+}
+
+.omnibar-popover ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.omnibar-popover li {
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.omnibar-popover li:hover,
+.omnibar-popover li.selected {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.omnibar-cmd-name {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.omnibar-cmd-desc {
+  font-size: 0.8em;
+  opacity: 0.65;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ─── Blackboard Drawer ─── */
 .bb-toggle {
-  position: fixed;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 7px 16px;
-  border-radius: 20px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: 12px;
   font-family: var(--font-sans);
   cursor: pointer;
-  z-index: 100;
   display: flex;
   align-items: center;
-  gap: 6px;
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(12px);
+  gap: 4px;
   transition: all var(--transition-fast);
+  white-space: nowrap;
 }
 
 .bb-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
-  transform: translateX(-50%) translateY(-2px);
-  box-shadow: var(--shadow-lg), 0 0 16px var(--accent-dim);
 }
 
 .bb-drawer {
