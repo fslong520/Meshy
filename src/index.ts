@@ -504,52 +504,58 @@ export async function runServer(port: number) {
     });
 
     // Unified @ mention list — aggregates agents, skills, and MCP servers
-    daemon.on('mention:list', async (params: any, ws: any, msgId: string) => {
+    daemon.on('mention:list', (_params: any, ws: any, msgId: string) => {
+        const items: Array<{ namespace: string; name: string; label: string; description: string; emoji: string }> = [];
+
+        // Agents
         try {
-            // Agents
-            const subagentRegistry = engine.getSubagentRegistry();
-            const agentItems = subagentRegistry.listAgents().map((a: any) => ({
-                namespace: 'agent' as const,
-                name: a.id,
-                label: a.name,
-                description: a.description,
-                emoji: a.emoji || '🤖',
-            }));
-
-            // Skills
-            await activeWorkspace.memoryStore.initialize();
-            let skills = await activeWorkspace.memoryStore.getAllSkills();
-            if (skills.length === 0) {
-                const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
-                if (scanned.length > 0) {
-                    await activeWorkspace.memoryStore.syncSkills(scanned);
-                    skills = await activeWorkspace.memoryStore.getAllSkills();
-                }
+            const agentList = engine.getSubagentRegistry().listAgents();
+            for (const a of agentList) {
+                items.push({
+                    namespace: 'agent',
+                    name: a.name,
+                    label: a.name,
+                    description: a.description,
+                    emoji: a.emoji || '🤖',
+                });
             }
-            const skillItems = skills.map((s: any) => ({
-                namespace: 'skill' as const,
-                name: s.name,
-                label: s.name,
-                description: s.description || '',
-                emoji: '⚡',
-            }));
-
-            // MCP Servers
-            const mcpServers = activeWorkspace.mcpHost.getServerList();
-            const mcpItems = mcpServers.map((m: any) => ({
-                namespace: 'mcp' as const,
-                name: m.name,
-                label: m.name,
-                description: m.description || m.command || '',
-                emoji: '🔌',
-            }));
-
-            daemon.sendResponse(ws, msgId, {
-                items: [...agentItems, ...skillItems, ...mcpItems],
-            });
         } catch (err: any) {
-            daemon.sendResponse(ws, msgId, { items: [], error: err.message });
+            console.error('[mention:list] agents error:', err.message);
         }
+
+        // Skills (sync scan only — no DB await)
+        try {
+            const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
+            for (const s of scanned) {
+                items.push({
+                    namespace: 'skill',
+                    name: s.name,
+                    label: s.name,
+                    description: s.description || '',
+                    emoji: '⚡',
+                });
+            }
+        } catch (err: any) {
+            console.error('[mention:list] skills error:', err.message);
+        }
+
+        // MCP Servers
+        try {
+            const mcpServers = activeWorkspace.mcpHost.getServerList();
+            for (const m of mcpServers) {
+                items.push({
+                    namespace: 'mcp',
+                    name: m.name,
+                    label: m.name,
+                    description: (m as any).description || (m as any).command || '',
+                    emoji: '🔌',
+                });
+            }
+        } catch (err: any) {
+            console.error('[mention:list] mcp error:', err.message);
+        }
+
+        daemon.sendResponse(ws, msgId, { items });
     });
 
     daemon.on('skill:list', async (ws, msgId) => {

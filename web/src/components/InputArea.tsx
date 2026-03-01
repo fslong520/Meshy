@@ -147,18 +147,20 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
     }
 
     const applyMention = (item: { namespace: string; label?: string; name?: string; emoji?: string }) => {
-        if (!mentionParsed.namespace && 'namespace' in item) {
-            // User selected a namespace category → drill into it
+        if (!mentionParsed.namespace) {
+            // User selected a namespace category → drill into second level
             const newText = text.replace(/@[^\s]*$/, `@${item.namespace}:`)
             setText(newText)
             setMentionQuery(`${item.namespace}:`)
             setMentionSelectedIndex(0)
+            // Explicitly keep popover open for second-level display
+            setMentionVisible(true)
             if (textareaRef.current) textareaRef.current.focus()
             return
         }
-        // User selected a specific entity → apply it
+        // User selected a specific entity → apply and close
         const entityName = item.name || item.label || ''
-        const ns = mentionParsed.namespace || (item as any).namespace
+        const ns = mentionParsed.namespace
         const newText = text.replace(/@[^\s]*$/, `@${ns}:${entityName} `)
         setText(newText)
         setMentionVisible(false)
