@@ -62,6 +62,11 @@ export class TaskEngine {
         return this.skillRegistry;
     }
     private subagentRegistry: SubagentRegistry;
+
+    /** 暴露 SubagentRegistry 供外部 RPC 调用。 */
+    public getSubagentRegistry(): SubagentRegistry {
+        return this.subagentRegistry;
+    }
     private injector: LazyInjector;
 
     // Phase 3 组件

@@ -99,6 +99,13 @@ export class SessionManager {
     }
 
     /**
+     * Save the given session (alias for snapshotManager.snapshot).
+     */
+    public saveSession(session: Session): void {
+        this.snapshotManager.snapshot(session);
+    }
+
+    /**
      * Suspend the current active session (persist to disk and mark suspended).
      */
     public suspendSession(session: Session): void {

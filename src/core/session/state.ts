@@ -21,6 +21,7 @@ export class Session {
     public createdAt: string;
     public updatedAt: string;
     public status: SessionStatus;
+    public activeAgentId: string;
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -47,6 +48,7 @@ export class Session {
         this.createdAt = now;
         this.updatedAt = now;
         this.status = 'active';
+        this.activeAgentId = 'default';
     }
 
     public addMessage(message: StandardMessage) {
@@ -125,6 +127,7 @@ export class Session {
             createdAt: this.createdAt,
             updatedAt: this.updatedAt,
             status: this.status,
+            activeAgentId: this.activeAgentId,
         };
 
         let result = JSON.stringify(baseState) + '\n';
@@ -148,6 +151,7 @@ export class Session {
                 if (parsedMeta.title) session.title = parsedMeta.title;
                 session.history = parsedMeta.history || [];
                 session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
+                session.activeAgentId = parsedMeta.activeAgentId || 'default';
                 if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
                 if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
                 if (parsedMeta.status) session.status = parsedMeta.status;

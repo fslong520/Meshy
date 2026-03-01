@@ -453,6 +453,36 @@ export async function runServer(port: number) {
         }
     });
 
+    daemon.on('agent:list', (ws, msgId) => {
+        const subagentRegistry = engine.getSubagentRegistry();
+        const agents = subagentRegistry.listAgents();
+        daemon.sendResponse(ws, msgId, {
+            agents,
+            activeAgentId: session.activeAgentId
+        });
+    });
+
+    daemon.on('agent:switch', (params: { agentId: string }, ws, msgId) => {
+        try {
+            const { agentId } = params;
+            if (!agentId) throw new Error('Agent ID is required');
+
+            // 验证 agent 存在
+            const subagentRegistry = engine.getSubagentRegistry();
+            if (!subagentRegistry.getAgent(agentId)) {
+                throw new Error(`Agent ${agentId} not found`);
+            }
+
+            session.activeAgentId = agentId;
+            sessionManager.saveSession(session);
+
+            console.log(`[Meshy] Web UI switched agent to: ${agentId}`);
+            daemon.sendResponse(ws, msgId, { success: true, agentId });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
     daemon.on('skill:list', async (ws, msgId) => {
         try {
             await activeWorkspace.memoryStore.initialize();

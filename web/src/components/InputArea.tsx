@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { sendRpc } from '../store/ws'
 import { ModelSelector } from './ModelSelector'
+import { AgentSelector, type AgentInfo } from './AgentSelector'
 
 interface Props {
     onSend: (text: string) => void;
@@ -11,9 +12,11 @@ interface Props {
 
 export function InputArea({ onSend, disabled, connected }: Props) {
     const [text, setText] = useState('')
-    const [mode, setMode] = useState<'plan' | 'build'>('build')
+    const [mode, setMode] = useState<'standard' | 'smart' | 'auto'>('smart')
     const [models, setModels] = useState<Record<string, { protocol: string, models: string[] }>>({})
     const [activeModel, setActiveModel] = useState<string>('')
+    const [agents, setAgents] = useState<AgentInfo[]>([])
+    const [activeAgentId, setActiveAgentId] = useState<string>('default')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     useEffect(() => {
@@ -24,6 +27,12 @@ export function InputArea({ onSend, disabled, connected }: Props) {
                 setActiveModel(res.defaultModel)
             }
         })
+        sendRpc<{ agents: AgentInfo[], activeAgentId: string }>('agent:list').then((res) => {
+            if (res) {
+                setAgents(res.agents || [])
+                setActiveAgentId(res.activeAgentId || 'default')
+            }
+        })
     }, [connected])
 
     const handleModelChange = (newModel: string) => {
@@ -31,9 +40,21 @@ export function InputArea({ onSend, disabled, connected }: Props) {
         sendRpc('model:switch', { model: newModel })
     }
 
+    const handleAgentChange = (agentId: string) => {
+        setActiveAgentId(agentId)
+        sendRpc('agent:switch', { agentId })
+    }
+
     const handleSend = useCallback(() => {
         if (!text.trim() || disabled) return
-        const finalPrompt = mode === 'plan' ? `/plan ${text.trim()}` : text.trim()
+
+        let finalPrompt = text.trim()
+        if (mode === 'smart') {
+            finalPrompt += '\n\n[System: Explore actively, but ask for permission before editing code. Use tool calls proactively to understand but pause before taking irreversible actions.]'
+        } else if (mode === 'auto') {
+            finalPrompt += '\n\n[System: Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.]'
+        }
+
         onSend(finalPrompt)
         setText('')
         // 重置高度
@@ -73,24 +94,35 @@ export function InputArea({ onSend, disabled, connected }: Props) {
                     onSelect={handleModelChange}
                 />
 
-                <select title="Select agent">
-                    <option>@Manager</option>
-                </select>
+                <AgentSelector
+                    agents={agents}
+                    activeAgentId={activeAgentId}
+                    onSelect={handleAgentChange}
+                />
 
                 <div style={{ flex: 1 }} />
 
                 <div className="mode-toggle">
                     <button
-                        className={mode === 'plan' ? 'active' : ''}
-                        onClick={() => setMode('plan')}
+                        className={mode === 'standard' ? 'active' : ''}
+                        onClick={() => setMode('standard')}
+                        title="Standard Chat"
                     >
-                        Plan
+                        Standard
                     </button>
                     <button
-                        className={mode === 'build' ? 'active' : ''}
-                        onClick={() => setMode('build')}
+                        className={mode === 'smart' ? 'active' : ''}
+                        onClick={() => setMode('smart')}
+                        title="Proactive with confirmations"
                     >
-                        Build
+                        Smart✨
+                    </button>
+                    <button
+                        className={mode === 'auto' ? 'active' : ''}
+                        onClick={() => setMode('auto')}
+                        title="Fully Autonomous execution"
+                    >
+                        Auto🚀
                     </button>
                 </div>
             </div>
