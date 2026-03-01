@@ -2,16 +2,43 @@
  * Subagent Loader — 子智能体配置加载器
  *
  * 职责：
- * 1. 扫描 `.agent/subagents/` 目录下的 Markdown 配置文件
- * 2. 解析 YAML-like Frontmatter（简易 key: value 行解析，不依赖 yaml 库）
- * 3. 解析 Markdown Body 作为 Subagent 的 System Prompt（灵魂/Persona）
- * 4. 提供按名称精确唤醒和按关键词模糊检索能力
+ * 1. 加载内置预设 Agent（src/core/agents/presets/*.md）
+ * 2. 扫描用户自定义 Agent（.meshy/agents/*.md），同名覆盖内置定义
+ * 3. 解析 YAML-like Frontmatter（简易 key: value 行解析，不依赖 yaml 库）
+ * 4. 解析 Markdown Body 作为 Agent 的 System Prompt（灵魂/Persona）
+ * 5. 提供按名称精确唤醒和按关键词模糊检索能力
  *
  * 参考 OpenCode 的 agent 定义方式：Frontmatter 配置 + Body 即 Prompt。
  */
 
 import fs from 'fs';
 import path from 'path';
+
+/**
+ * 解析内置 Agent 预设目录。
+ * 兼容 CJS（tsup 注入 __dirname）和直接 ts-node 执行两种场景。
+ */
+function resolvePresetsDir(): string {
+    const candidates: string[] = [];
+
+    // 方案 1: 基于 __dirname（CJS 或 tsup 注入）
+    if (typeof __dirname !== 'undefined') {
+        candidates.push(path.resolve(__dirname, '..', 'agents', 'presets'));
+    }
+
+    // 方案 2: 基于 process.argv[1]
+    if (process.argv[1]) {
+        candidates.push(path.resolve(path.dirname(process.argv[1]), 'core', 'agents', 'presets'));
+    }
+
+    // 方案 3: 基于 cwd (开发模式 fallback)
+    candidates.push(path.resolve(process.cwd(), 'src', 'core', 'agents', 'presets'));
+
+    for (const dir of candidates) {
+        if (fs.existsSync(dir)) return dir;
+    }
+    return candidates[0];
+}
 
 // ─── Subagent 配置 ───
 export interface SubagentConfig {
@@ -33,6 +60,12 @@ export interface SubagentConfig {
     maxContextMessages: number;
     /** 返回格式约束 */
     reportFormat: 'text' | 'json';
+    /** UI 展示用的 Emoji 图标 */
+    emoji: string;
+    /** 需要自动注入的上下文文件列表 */
+    contextInject: string[];
+    /** 是否为内置预设 Agent（不可被用户删除） */
+    isPreset: boolean;
 }
 
 // ─── Frontmatter 解析（简易 key: value，参考 OpenCode 实现） ───
@@ -118,33 +151,50 @@ function toStringArray(val: unknown): string[] {
 
 /**
  * SubagentRegistry — 子智能体注册表
+ *
+ * 加载顺序：内置预设（src/core/agents/presets/）→ 用户自定义（.meshy/agents/）。
+ * 用户同名文件覆盖内置预设。
  */
 export class SubagentRegistry {
     private agents: Map<string, SubagentConfig> = new Map();
-    private agentsDir: string;
+    private readonly userAgentsDir: string;
+    private readonly presetsDir: string;
 
     constructor(workspaceRoot: string = process.cwd()) {
-        this.agentsDir = path.join(workspaceRoot, '.meshy', 'agents');
+        this.userAgentsDir = path.join(workspaceRoot, '.meshy', 'agents');
+        this.presetsDir = resolvePresetsDir();
     }
 
     /**
-     * 扫描 .meshy/agents/ 目录，自动发现并注册所有子智能体配置。
+     * 扫描内置预设 + 用户自定义目录，注册所有 Agent 配置。
+     * 加载顺序：先内置预设（isPreset=true），再用户自定义（同名覆盖）。
      */
     public scan(): void {
-        if (!fs.existsSync(this.agentsDir)) return;
+        // 1. 加载内置预设 Agent
+        this.scanDirectory(this.presetsDir, true);
 
-        const files = fs.readdirSync(this.agentsDir).filter(f => f.endsWith('.md'));
+        // 2. 加载用户自定义 Agent（同名覆盖内置定义）
+        this.scanDirectory(this.userAgentsDir, false);
+    }
+
+    /**
+     * 扫描指定目录下的所有 .md 文件，解析为 SubagentConfig 并注册。
+     */
+    private scanDirectory(dir: string, isPreset: boolean): void {
+        if (!fs.existsSync(dir)) return;
+
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
 
         for (const file of files) {
-            const filePath = path.join(this.agentsDir, file);
+            const filePath = path.join(dir, file);
             const raw = fs.readFileSync(filePath, 'utf8');
             const { meta, body } = parseFrontmatter(raw);
 
-            const name = file.replace(/\.md$/, '');
+            const name = (typeof meta.name === 'string' ? meta.name : file.replace(/\.md$/, ''));
 
             const config: SubagentConfig = {
                 name,
-                model: typeof meta.model === 'string' ? meta.model : 'gpt-4o-mini',
+                model: typeof meta.model === 'string' ? meta.model : 'default',
                 allowedTools: toStringArray(meta['allowed-tools']),
                 description: typeof meta.description === 'string' ? meta.description : '',
                 systemPrompt: body,
@@ -154,6 +204,9 @@ export class SubagentRegistry {
                     ? meta['max-context-messages']
                     : 6,
                 reportFormat: meta['report-format'] === 'json' ? 'json' : 'text',
+                emoji: typeof meta.emoji === 'string' ? meta.emoji : '🤖',
+                contextInject: toStringArray(meta['context-inject']),
+                isPreset,
             };
 
             this.agents.set(name, config);
