@@ -192,6 +192,9 @@ export async function runMeshy(prompt: string, options?: { model?: string | null
         executionMode: options?.autoConfirm ? 'yolo' as any : undefined,
     });
 
+    // Cache skills in memory on startup
+    engine.getSkillRegistry().scan(activeWorkspace.rootPath);
+
     if (isResuming) {
         console.log(`[Meshy] Resuming task...`);
         await engine.resumeTask();
@@ -232,6 +235,9 @@ export async function runServer(port: number) {
         maxRetries: config.system.maxRetries,
         daemon,
     });
+
+    // Cache skills in memory on startup
+    engine.getSkillRegistry().scan(activeWorkspace.rootPath);
 
     // 监听 Web UI 发来的独立任务
     daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
@@ -483,24 +489,28 @@ export async function runServer(port: number) {
         }
     });
 
+    let cachedCommands: any[] | null = null;
     daemon.on('command:list', (params: any, ws: any, msgId: string) => {
-        const builtinCommands = [
-            { name: 'ask', description: 'Ask without modifying code' },
-            { name: 'plan', description: 'Plan mode, output structured steps' },
-            { name: 'model', description: 'List providers or switch model' },
-            { name: 'session', description: 'Session management' },
-            { name: 'workflow', description: 'Workflow management' },
-            { name: 'clear', description: 'Clear current session' },
-            { name: 'undo', description: 'Roll back last edit' },
-            { name: 'test', description: 'Run tests' },
-            { name: 'compact', description: 'Compress conversation history' },
-            { name: 'feedback', description: 'Thumbs up/down for current session' },
-            { name: 'init', description: 'Initialize workspace context (tech-stack, product)' },
-            { name: 'help', description: 'Show this help' },
-        ];
-        const customCommands = (engine as any).customCommands ? (engine as any).customCommands.listCommands() : [];
+        if (!cachedCommands) {
+            const builtinCommands = [
+                { name: 'ask', description: 'Ask without modifying code' },
+                { name: 'plan', description: 'Plan mode, output structured steps' },
+                { name: 'model', description: 'List providers or switch model' },
+                { name: 'session', description: 'Session management' },
+                { name: 'workflow', description: 'Workflow management' },
+                { name: 'clear', description: 'Clear current session' },
+                { name: 'undo', description: 'Roll back last edit' },
+                { name: 'test', description: 'Run tests' },
+                { name: 'compact', description: 'Compress conversation history' },
+                { name: 'feedback', description: 'Thumbs up/down for current session' },
+                { name: 'init', description: 'Initialize workspace context (tech-stack, product)' },
+                { name: 'help', description: 'Show this help' },
+            ];
+            const customCommands = (engine as any).customCommands ? (engine as any).customCommands.listCommands() : [];
+            cachedCommands = [...builtinCommands, ...customCommands];
+        }
         daemon.sendResponse(ws, msgId, {
-            commands: [...builtinCommands, ...customCommands]
+            commands: cachedCommands
         });
     });
 
@@ -561,17 +571,8 @@ export async function runServer(port: number) {
 
     daemon.on('skill:list', async (ws, msgId) => {
         try {
-            await activeWorkspace.memoryStore.initialize();
-            // Try DB first; fallback to in-memory registry
-            let skills = await activeWorkspace.memoryStore.getAllSkills();
-            if (skills.length === 0) {
-                // First use — populate from registry scan
-                const scanned = engine.getSkillRegistry().refreshAll(activeWorkspace.rootPath);
-                if (scanned.length > 0) {
-                    await activeWorkspace.memoryStore.syncSkills(scanned);
-                    skills = await activeWorkspace.memoryStore.getAllSkills();
-                }
-            }
+            // Serve directly from in-memory registry, initialized at startup
+            const skills = engine.getSkillRegistry().listSkills();
             daemon.sendResponse(ws, msgId, { skills });
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { skills: [], error: err.message });
