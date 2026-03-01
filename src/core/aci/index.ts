@@ -38,10 +38,48 @@ export class AgentComputerInterface {
      * Auto-paginates/truncates if exceeding max lines to prevent token explosion.
      */
     public readFile(filePath: string, startLine: number = 1, maxLines: number = 500): ReadFileResult {
-        const absolutePath = this.resolveSafePath(filePath);
+        let absolutePath: string;
+        try {
+            absolutePath = this.resolveSafePath(filePath);
+        } catch (e) {
+            throw new Error(`File lookup error: ${(e as Error).message}`);
+        }
 
         if (!fs.existsSync(absolutePath)) {
+            const dir = path.dirname(absolutePath);
+            const base = path.basename(absolutePath);
+            let suggestions: string[] = [];
+            try {
+                if (fs.existsSync(dir)) {
+                    const entries = fs.readdirSync(dir);
+                    suggestions = entries
+                        .filter(e => e.toLowerCase().includes(base.toLowerCase()) || base.toLowerCase().includes(e.toLowerCase()))
+                        .map(e => path.join(path.dirname(filePath), e))
+                        .slice(0, 3);
+                }
+            } catch (err) { }
+
+            if (suggestions.length > 0) {
+                throw new Error(`File not found: ${filePath}\n\nDid you mean one of these?\n${suggestions.join('\n')}`);
+            }
             throw new Error(`File not found: ${filePath}`);
+        }
+
+        const stat = fs.statSync(absolutePath);
+        if (stat.isDirectory()) {
+            throw new Error(`Cannot read directory as file: ${filePath}. Please use a tool like 'ls' or 'bash' to list its contents.`);
+        }
+
+        // Simple binary check: check first 4096 bytes for null characters
+        const sampleSize = Math.min(4096, stat.size);
+        if (sampleSize > 0) {
+            const buffer = Buffer.alloc(sampleSize);
+            const fd = fs.openSync(absolutePath, 'r');
+            fs.readSync(fd, buffer, 0, sampleSize, 0);
+            fs.closeSync(fd);
+            if (buffer.includes(0)) {
+                throw new Error(`Cannot read binary file: ${filePath}`);
+            }
         }
 
         const content = fs.readFileSync(absolutePath, 'utf8');
@@ -54,13 +92,28 @@ export class AgentComputerInterface {
         const endLine = Math.min(startLine + maxLines - 1, totalLines);
         const sliced = lines.slice(startLine - 1, endLine);
 
-        // Prefix with line numbers
-        const numberedContent = sliced.map((line, idx) => `${startLine + idx}: ${line}`).join('\n');
+        const MAX_LINE_LENGTH = 2000;
+        // Prefix with line numbers and truncate long lines
+        const numberedContent = sliced.map((line, idx) => {
+            let safeLine = line.length > MAX_LINE_LENGTH
+                ? line.substring(0, MAX_LINE_LENGTH) + `... (line truncated to ${MAX_LINE_LENGTH} chars)`
+                : line;
+            return `${startLine + idx}: ${safeLine}`;
+        }).join('\n');
+
+        const truncated = endLine < totalLines;
+
+        let formattedContent = numberedContent;
+        if (truncated) {
+            formattedContent += `\n\n(Showing lines ${startLine}-${endLine} of ${totalLines}. Use startLine=${endLine + 1} to continue.)`;
+        } else {
+            formattedContent += `\n\n(End of file - total ${totalLines} lines)`;
+        }
 
         return {
-            content: numberedContent,
+            content: formattedContent,
             totalLines,
-            truncated: endLine < totalLines,
+            truncated,
             hash
         };
     }

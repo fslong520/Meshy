@@ -419,6 +419,29 @@ export class TaskEngine {
                 break;
             }
 
+            case 'init': {
+                const root = this.workspace.rootPath;
+                const filesToCheck = ['package.json', 'Cargo.toml', 'requirements.txt', 'go.mod', 'README.md'];
+                let structureInfo = '';
+                try {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const items = fs.readdirSync(root).filter((n: string) => !n.startsWith('.') && n !== 'node_modules');
+                    structureInfo += `[Workspace Root Files & Folders]\n${items.join(', ')}\n\n`;
+                    for (const f of filesToCheck) {
+                        const fp = path.join(root, f);
+                        if (fs.existsSync(fp)) {
+                            // Only load the first 2000 characters to avoid huge context usage
+                            structureInfo += `[Content of ${f}]\n${fs.readFileSync(fp, 'utf8').substring(0, 2000)}\n\n`;
+                        }
+                    }
+                } catch (e) {
+                    structureInfo += 'Failed to reliably read workspace structure.\n';
+                }
+
+                command.args = `你现在执行工作区初始化流程，我已经为你提取了项目的结构和核心配置信息：\n\n${structureInfo}\n\n【必须执行的指令】\n1. **绝对不要**使用 bash、grep、readFile 工具去进一步探索文件，只利用我上面已经提供给你的信息！\n2. 推断该项目的技术栈，在工作区创建 \`.meshy/context/tech-stack.md\` 并写入推断出的技术栈内容。\n3. 创建 \`.meshy/context/product.md\` 框架空模版，完成后，并在对话中询问我该项目的业务逻辑、核心功能和目标用户，以便我后续补充。\n4. 在成功创建这俩个文件后再提问。` + (command.args ? '\n\n用户附加信息：' + command.args : '');
+            }
+            // Fallthrough to the standard LLM execution flow
             case 'ask':
             case 'plan':
             case 'summarize':
@@ -923,8 +946,8 @@ export class TaskEngine {
             description: 'Read file contents with line numbers. Supports pagination via startLine/maxLines.',
             parameters: z.object({
                 filePath: z.string().describe('Path to the file relative to workspace root'),
-                startLine: z.number().describe('Starting line number (1-indexed), default 1').optional(),
-                maxLines: z.number().describe('Max lines to return, default 500').optional(),
+                startLine: z.coerce.number().describe('Starting line number (1-indexed), default 1').optional(),
+                maxLines: z.coerce.number().describe('Max lines to return, default 500').optional(),
             }),
             async execute(args) {
                 const res = aci.readFile(args.filePath, args.startLine, args.maxLines);

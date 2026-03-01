@@ -495,6 +495,7 @@ export async function runServer(port: number) {
             { name: 'test', description: 'Run tests' },
             { name: 'compact', description: 'Compress conversation history' },
             { name: 'feedback', description: 'Thumbs up/down for current session' },
+            { name: 'init', description: 'Initialize workspace context (tech-stack, product)' },
             { name: 'help', description: 'Show this help' },
         ];
         const customCommands = (engine as any).customCommands ? (engine as any).customCommands.listCommands() : [];

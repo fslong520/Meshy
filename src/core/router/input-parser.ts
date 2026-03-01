@@ -23,6 +23,7 @@ export type SlashCommandType =
     | 'session'    // 会话管理 (list/save/load/archive)
     | 'workflow'   // 触发自动工作流流水线
     | 'feedback'   // 点赞/踩反馈
+    | 'init'       // 初始化工作区上下文
     | 'help';      // 显示帮助
 
 export interface SlashCommand {
@@ -86,7 +87,7 @@ export interface ParsedInput {
 // ─── 常量 ───
 
 const VALID_SLASH_COMMANDS = new Set<SlashCommandType>([
-    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'model', 'help', 'feedback',
+    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'model', 'help', 'feedback', 'init', 'session', 'workflow',
 ]);
 
 /**
