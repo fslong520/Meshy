@@ -243,7 +243,16 @@ export async function runServer(port: number) {
     daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
         console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
         try {
+            const isNew = session.history.length === 0;
+            if (isNew) {
+                // Auto-name empty session based on prompt
+                session.title = submittedPrompt.slice(0, 30) + (submittedPrompt.length > 30 ? '...' : '');
+            }
+
             await engine.runTask(submittedPrompt);
+
+            // Always broadcast session list after a task finishes (so new sessions and new titles appear)
+            daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });
             daemon.broadcast('agent:done', { id });
         } catch (err) {
             console.error('[Meshy] Task from Web UI failed:', err);
@@ -316,7 +325,8 @@ export async function runServer(port: number) {
 
     daemon.on('workspace:list', (ws, msgId) => {
         daemon.sendResponse(ws, msgId, {
-            workspaces: workspaceManager.listWorkspaces()
+            workspaces: workspaceManager.listWorkspaces(),
+            activeWorkspace: engine.workspace.rootPath
         });
     });
 

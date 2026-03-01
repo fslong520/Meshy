@@ -881,6 +881,17 @@ export class TaskEngine {
                 this.workspace.snapshotManager.appendStateUpdate(this.session);
 
             } catch (err: unknown) {
+                if ((err as any).isSandboxRejection) {
+                    this.logger.error('ENGINE', `Action denied by Sandbox. Aborting execution loop.`);
+                    console.log(`\n[Engine] Action denied by Sandbox. Aborting execution loop.`);
+                    this.addMessageAndAppend({
+                        role: 'user',
+                        content: `System Warning: ${(err as Error).message}. Execution aborted by user/sandbox.`
+                    });
+                    this.interrupt();
+                    break;
+                }
+
                 retries++;
                 const message = err instanceof Error ? err.message : String(err);
                 this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
@@ -1069,7 +1080,10 @@ export class TaskEngine {
         if (!approval.approved) {
             const reason = approval.reason || 'User denied the action.';
             this.daemon?.broadcast('agent:error', { id, tool: name, reason });
-            return `Action denied by sandbox: ${reason}`;
+            // Throw an error that stops the inner execution and signals the LLM loop to stop retrying immediately
+            const err = new Error(`Action denied by user or sandbox: ${reason}`);
+            (err as any).isSandboxRejection = true;
+            throw err;
         }
 
         // Broadcast if it was auto-approved by AI

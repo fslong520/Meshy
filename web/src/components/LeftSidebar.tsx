@@ -32,10 +32,12 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Pro
 
     const refreshWorkspaces = useCallback(() => {
         if (!connected) return
-        sendRpc<{ workspaces: string[] }>('workspace:list').then((res) => {
+        sendRpc<{ workspaces: string[]; activeWorkspace?: string }>('workspace:list').then((res) => {
             if (res && res.workspaces) {
                 setWorkspaces(res.workspaces)
-                if (!activeWorkspace && res.workspaces.length > 0) {
+                if (res.activeWorkspace) {
+                    setActiveWorkspace(res.activeWorkspace)
+                } else if (!activeWorkspace && res.workspaces.length > 0) {
                     setActiveWorkspace(res.workspaces[res.workspaces.length - 1])
                 }
             }
@@ -119,13 +121,41 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Pro
             {/* Workspace */}
             <div className="sidebar-section">
                 <div className="sidebar-section-title">Workspace</div>
-                <select value={activeWorkspace} onChange={handleWorkspaceChange}>
-                    <option value="" disabled>Select a Workspace</option>
-                    {workspaces.map(w => (
-                        <option key={w} value={w}>{w}</option>
-                    ))}
-                    <option value="__add_new__">+ Add Workspace...</option>
-                </select>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <select value={activeWorkspace} onChange={handleWorkspaceChange} style={{ flex: 1 }}>
+                        <option value="" disabled>Select a Workspace</option>
+                        {workspaces.map(w => (
+                            <option key={w} value={w}>{w}</option>
+                        ))}
+                        <option value="__add_new__">+ Add Workspace...</option>
+                    </select>
+                    {activeWorkspace && (
+                        <button
+                            className="icon-button"
+                            title="Delete this workspace"
+                            onClick={async () => {
+                                if (window.confirm(`Are you sure you want to remove workspace: ${activeWorkspace}?`)) {
+                                    const res = await sendRpc<{ success: boolean; error?: string }>('workspace:remove', { path: activeWorkspace })
+                                    if (res.success) {
+                                        refreshWorkspaces()
+                                    } else {
+                                        alert(`Failed to remove workspace: ${res.error}`)
+                                    }
+                                }
+                            }}
+                            style={{
+                                padding: '4px 8px',
+                                background: 'transparent',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                color: 'var(--text-muted)'
+                            }}
+                        >
+                            ✕
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Sessions */}

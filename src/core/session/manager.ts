@@ -87,7 +87,6 @@ export class SessionManager {
      */
     public createSession(): Session {
         const session = new Session(`session-${Date.now()}`);
-        this.snapshotManager.snapshot(session);
         return session;
     }
 
