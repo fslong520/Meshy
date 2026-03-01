@@ -1,8 +1,17 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { sendRpc } from '../store/ws'
 import { ModelSelector } from './ModelSelector'
 import { AgentSelector, type AgentInfo } from './AgentSelector'
+
+// @ Mention item from mention:list RPC
+interface MentionItem {
+    namespace: 'agent' | 'skill' | 'mcp';
+    name: string;
+    label: string;
+    description: string;
+    emoji: string;
+}
 
 interface Props {
     onSend: (text: string) => void;
@@ -20,11 +29,17 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
     const [agents, setAgents] = useState<AgentInfo[]>([])
     const [activeAgentId, setActiveAgentId] = useState<string>('default')
 
-    // Command Pallete (Omnibar) states
+    // Command Palette (Omnibar) states
     const [commands, setCommands] = useState<{ name: string, description: string }[]>([])
     const [omnibarVisible, setOmnibarVisible] = useState(false)
     const [omnibarFilter, setOmnibarFilter] = useState('')
     const [selectedIndex, setSelectedIndex] = useState(0)
+
+    // @ Mention popover states
+    const [mentionItems, setMentionItems] = useState<MentionItem[]>([])
+    const [mentionVisible, setMentionVisible] = useState(false)
+    const [mentionQuery, setMentionQuery] = useState('') // raw text after @, e.g. 'agent:cod'
+    const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -45,6 +60,11 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
         sendRpc<{ commands: { name: string, description: string }[] }>('command:list').then((res) => {
             if (res && res.commands) {
                 setCommands(res.commands)
+            }
+        })
+        sendRpc<{ items: MentionItem[] }>('mention:list').then((res) => {
+            if (res && res.items) {
+                setMentionItems(res.items)
             }
         })
     }, [connected])
@@ -72,12 +92,50 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
         onSend(finalPrompt)
         setText('')
         setOmnibarVisible(false)
+        setMentionVisible(false)
         setSelectedIndex(0)
+        setMentionSelectedIndex(0)
         // 重置高度
         if (textareaRef.current) textareaRef.current.style.height = '44px'
     }, [text, disabled, onSend, mode])
 
     const filteredCommands = commands.filter(c => c.name.toLowerCase().includes(omnibarFilter))
+
+    // Namespace categories for @ first-level menu
+    const NAMESPACE_CATEGORIES = [
+        { namespace: 'agent', name: 'agent', label: 'Agents', emoji: '🤖', description: 'Switch or invoke an agent' },
+        { namespace: 'skill', name: 'skill', label: 'Skills', emoji: '⚡', description: 'Attach a skill to context' },
+        { namespace: 'mcp', name: 'mcp', label: 'MCP Servers', emoji: '🔌', description: 'Connect an MCP server' },
+    ]
+
+    // Parse mention query: determine if we're at namespace level or entity level
+    const mentionParsed = useMemo(() => {
+        const colonIdx = mentionQuery.indexOf(':')
+        if (colonIdx >= 0) {
+            const ns = mentionQuery.slice(0, colonIdx).toLowerCase()
+            const entityFilter = mentionQuery.slice(colonIdx + 1).toLowerCase()
+            return { namespace: ns, entityFilter }
+        }
+        return { namespace: null, entityFilter: mentionQuery.toLowerCase() }
+    }, [mentionQuery])
+
+    // Filtered mention items for the popover
+    const filteredMentionItems = useMemo(() => {
+        if (!mentionParsed.namespace) {
+            // Show namespace categories filtered by input
+            return NAMESPACE_CATEGORIES.filter(c =>
+                c.namespace.includes(mentionParsed.entityFilter) ||
+                c.label.toLowerCase().includes(mentionParsed.entityFilter)
+            )
+        }
+        // Show entities within the selected namespace
+        return mentionItems
+            .filter(item => item.namespace === mentionParsed.namespace)
+            .filter(item =>
+                item.name.toLowerCase().includes(mentionParsed.entityFilter) ||
+                item.label.toLowerCase().includes(mentionParsed.entityFilter)
+            )
+    }, [mentionParsed, mentionItems])
 
     const applyCommand = (cmdName: string) => {
         setText(`/${cmdName} `)
@@ -88,8 +146,29 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
         }
     }
 
+    const applyMention = (item: { namespace: string; label?: string; name?: string; emoji?: string }) => {
+        if (!mentionParsed.namespace && 'namespace' in item) {
+            // User selected a namespace category → drill into it
+            const newText = text.replace(/@[^\s]*$/, `@${item.namespace}:`)
+            setText(newText)
+            setMentionQuery(`${item.namespace}:`)
+            setMentionSelectedIndex(0)
+            if (textareaRef.current) textareaRef.current.focus()
+            return
+        }
+        // User selected a specific entity → apply it
+        const entityName = item.name || item.label || ''
+        const ns = mentionParsed.namespace || (item as any).namespace
+        const newText = text.replace(/@[^\s]*$/, `@${ns}:${entityName} `)
+        setText(newText)
+        setMentionVisible(false)
+        setMentionSelectedIndex(0)
+        if (textareaRef.current) textareaRef.current.focus()
+    }
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (omnibarVisible) {
+        // Handle Omnibar keyboard navigation
+        if (omnibarVisible && filteredCommands.length > 0) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault()
                 setSelectedIndex(prev => Math.min(prev + 1, filteredCommands.length - 1))
@@ -107,6 +186,29 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
             } else if (e.key === 'Escape') {
                 e.preventDefault()
                 setOmnibarVisible(false)
+                return
+            }
+        }
+
+        // Handle @ Mention keyboard navigation
+        if (mentionVisible && filteredMentionItems.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setMentionSelectedIndex(prev => Math.min(prev + 1, filteredMentionItems.length - 1))
+                return
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setMentionSelectedIndex(prev => Math.max(prev - 1, 0))
+                return
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault()
+                if (filteredMentionItems[mentionSelectedIndex]) {
+                    applyMention(filteredMentionItems[mentionSelectedIndex])
+                }
+                return
+            } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setMentionVisible(false)
                 return
             }
         }
@@ -129,15 +231,26 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
         // Show omnibar if text starts with '/'
         if (val.startsWith('/')) {
             const parts = val.split(' ')
-            if (parts.length === 1) { // Only checking the first word
+            if (parts.length === 1) {
                 setOmnibarVisible(true)
                 setOmnibarFilter(val.slice(1).toLowerCase())
                 setSelectedIndex(0)
             } else {
                 setOmnibarVisible(false)
             }
+            setMentionVisible(false)
         } else {
             setOmnibarVisible(false)
+        }
+
+        // Detect @ mention trigger: find the last @ that isn't followed by a space
+        const atMatch = val.match(/@([^\s]*)$/)
+        if (atMatch) {
+            setMentionVisible(true)
+            setMentionQuery(atMatch[1])
+            setMentionSelectedIndex(0)
+        } else {
+            setMentionVisible(false)
         }
 
         const el = e.target
@@ -211,6 +324,43 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
                             >
                                 <span className="omnibar-cmd-name">/{cmd.name}</span>
                                 <span className="omnibar-cmd-desc">{cmd.description}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
+            {/* @ Mention Popover */}
+            {mentionVisible && filteredMentionItems.length > 0 && (
+                <div className="omnibar-popover mention-popover">
+                    {!mentionParsed.namespace && (
+                        <div className="mention-header">Select a category</div>
+                    )}
+                    {mentionParsed.namespace && (
+                        <div className="mention-header">
+                            @{mentionParsed.namespace}: — select an item
+                        </div>
+                    )}
+                    <ul style={{ listStyle: 'none', margin: 0, padding: '4px' }}>
+                        {filteredMentionItems.map((item, i) => (
+                            <li
+                                key={`${item.namespace}-${item.name || item.label}`}
+                                onClick={() => applyMention(item)}
+                                onMouseEnter={() => setMentionSelectedIndex(i)}
+                                className={i === mentionSelectedIndex ? 'selected' : ''}
+                            >
+                                <span className="mention-item-left">
+                                    <span className="mention-emoji">{item.emoji}</span>
+                                    <span className="omnibar-cmd-name">
+                                        {mentionParsed.namespace
+                                            ? (item as MentionItem).name
+                                            : `@${item.namespace}:`
+                                        }
+                                    </span>
+                                </span>
+                                <span className="omnibar-cmd-desc">
+                                    {item.description || (item as any).label || ''}
+                                </span>
                             </li>
                         ))}
                     </ul>

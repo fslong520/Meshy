@@ -283,6 +283,11 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'mention:list': {
+                this.emit('mention:list', msg.params, ws, msg.id);
+                break;
+            }
+
             case 'session:interrupt': {
                 this.emit('session:interrupt', ws, msg.id);
                 break;
