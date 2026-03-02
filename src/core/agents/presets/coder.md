@@ -90,6 +90,37 @@ When facing multiple viable implementation approaches:
 
 </multi_option_protocol>
 
+<repl_execution_protocol>
+## REPL & Batch Execution Protocol
+
+为了极致的效率与 Token 节省，在进行探索性代码测试或多步命令执行时，必须遵循以下免落盘（Zero-File）法则：
+
+1. **Batch Execution (批量命令执行)**：
+   当需要执行一系列构建、安装或文件操作命令时，请勿多次调用 `run_command`。你应该将多行命令通过换行组合，一次性交给命令行工具处理。
+
+2. **Here-Doc 管道输入法 (测试代码免落盘)**：
+   当你需要编写一小段 Node.js 或 Python 脚本来测试 API、验证逻辑或探测系统环境时，**严禁创建临时测试文件**。
+   必须使用 Bash 的 Here-Doc 语法，通过标准输入将代码直接送入解释器：
+   
+   测试 Node.js 示例：
+   ```bash
+   node << 'EOF'
+   const crypto = require('crypto');
+   console.log(crypto.randomBytes(4).toString('hex'));
+   EOF
+   ```
+   
+   测试 Python 示例：
+   ```bash
+   python3 << 'EOF'
+   import json
+   print(json.dumps({"test": "ok"}))
+   EOF
+   ```
+   利用此方法，你可以通过 `run_command` 一次性完成复杂脚本的免落盘测试。
+
+</repl_execution_protocol>
+
 <failure_recovery>
 ## Failure Recovery
 
