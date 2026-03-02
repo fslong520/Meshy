@@ -9,9 +9,9 @@ export class LocalEmbeddingAdapter implements ILLMProvider {
     private embedderPipeline: any = null;
     private initPromise: Promise<void> | null = null;
 
-    // We are using nomic-embed-text-v1.5 which has excellent performance
-    // and naturally produces 768 dimensions by default.
-    private modelName = 'Xenova/nomic-embed-text-v1.5';
+    // We are using bge-base-en-v1.5 which has excellent performance, is completely
+    // ungated (unlike Nomic models), and naturally produces 768 dimensions by default.
+    private modelName = 'Xenova/bge-base-en-v1.5';
 
     constructor() {
         // Enforce the user's constraint: Do NOT pollute the repository or tmp directories 
