@@ -53,7 +53,7 @@ export class MemoryStore {
                 summary TEXT NOT NULL,
                 tags TEXT NOT NULL DEFAULT '[]',
                 category TEXT NOT NULL DEFAULT 'knowledge',
-                embedding FLOAT32(1536),
+                embedding FLOAT32(768),
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )`,
             `CREATE TABLE IF NOT EXISTS preferences (

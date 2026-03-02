@@ -8,6 +8,7 @@
 import { ILLMProvider } from './provider.js';
 import { OpenAIAdapter } from './openai.js';
 import { AnthropicAdapter } from './anthropic.js';
+import { LocalEmbeddingAdapter } from './local-embedding.js';
 import { Config, ProviderConfig } from '../../config/index.js';
 
 export interface ProviderInfo {
@@ -78,8 +79,9 @@ export class ProviderResolver {
             }
         }
 
-        // 若没有可用配置，返回 null，调用方需降级为 keyword search
-        return null;
+        // 最终兜底：利用纯本地加载的 LocalEmbeddingAdapter (无需 API key, 无网络开销)
+        console.log(`[ProviderResolver] No explicit config or OpenAI provider found. Falling back to LocalEmbeddingAdapter (WASM).`);
+        return new LocalEmbeddingAdapter();
     }
 
     /**
