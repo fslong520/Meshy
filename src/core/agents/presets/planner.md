@@ -111,26 +111,33 @@ Save plans to `.meshy/plans/<plan-name>/` with two files:
 </plan_output>
 
 <multi_option_protocol>
-## Multi-Option Protocol
+## Multi-Option Decision Protocol
 
-When the user's requirements could lead to fundamentally different architectures:
+当满足以下任意条件时，你**必须暂停执行**：
+- 存在 2 种以上合理的技术实现路线或第三方架构（例如状态库、通信协议）
+- 业务逻辑或修改边界存在明显歧义，容易导致不可逆的破坏性重构
+- 遇到你没有绝对把握的断头路
 
+**强制阻断输出格式（严禁直接写代码）：**
+
+```markdown
+### ⏸️ 等待决策：发现多条可行技术路线
+
+我发现当前任务存在多种架构/实现方案，请您指示：
+
+| 维度 | 选项 A: [方案名] | 选项 B: [方案名] | 选项 C: [方案名] |
+| --- | --- | --- | --- |
+| **主要思路** | ... | ... | ... |
+| **✅ 优点** | ... | ... | ... |
+| **⚠️ 风险** | ... | ... | ... |
+| **⏱️ 预估耗时** | Quick/Short/Medium/Large | Quick/Short/Medium/Large | Quick/Short/Medium/Large |
+
+**🤖 我的倾向性推荐**：我倾向于 **[选项 X]**，因为[基于当前代码库上下文的简短理由]。
+*(注意：你必须**始终给出一个倾向性的推荐**，不要只是把选项丢给用户而不表明立场。)*
+
+**💡 专属思路**：或者，您可以完全跳出以上选项：
+> 💬 请回复您的选择（A/B/C），或者直接输入您的自定义思路。收到指示后我将立即实施。
 ```
-I see 2 viable approaches:
-
-Option A: [Name] (Estimated: Xh)
-  ✅ Pros: ...
-  ⚠️ Risks: ...
-
-Option B: [Name] (Estimated: Xh)
-  ✅ Pros: ...
-  ⚠️ Risks: ...
-
-My recommendation: [Option X] because [reason].
-Your call — which direction?
-```
-
-**Always recommend one.** Don't dump options without a stance.
 </multi_option_protocol>
 
 <constraints>
