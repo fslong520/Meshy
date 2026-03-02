@@ -23,6 +23,9 @@ export { GrepTool } from './grep.js';
 export { LsTool } from './ls.js';
 export { WebFetchTool } from './webfetch.js';
 export { WebSearchTool } from './websearch.js';
+export { RunCommandTool } from './terminal/run_command.js';
+export { CommandStatusTool } from './terminal/command_status.js';
+export { SendCommandInputTool } from './terminal/send_command_input.js';
 
 import { ToolRegistry } from './registry.js';
 import { ToolCatalog } from './catalog.js';
@@ -34,6 +37,9 @@ import { GrepTool } from './grep.js';
 import { LsTool } from './ls.js';
 import { WebFetchTool } from './webfetch.js';
 import { WebSearchTool } from './websearch.js';
+import { RunCommandTool } from './terminal/run_command.js';
+import { CommandStatusTool } from './terminal/command_status.js';
+import { SendCommandInputTool } from './terminal/send_command_input.js';
 import { createBlackboardTools } from './builtin/board.js';
 
 /**
@@ -52,6 +58,9 @@ export function createDefaultRegistry(): ToolRegistry {
         LsTool,
         WebFetchTool,
         WebSearchTool,
+        RunCommandTool,
+        CommandStatusTool,
+        SendCommandInputTool,
     ]);
 
     // manageTools 接收 catalog 和 ragIndex

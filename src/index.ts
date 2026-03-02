@@ -5,6 +5,7 @@ import { DaemonServer } from './core/daemon/server.js';
 import { WorkspaceManager } from './core/workspace/manager.js';
 import { SessionManager } from './core/session/manager.js';
 import { exportReplay, loadReplay } from './core/session/replay.js';
+import { terminalManager } from './core/terminal/manager.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -362,6 +363,15 @@ export async function runServer(port: number) {
     daemon.on('session:switch', async (sessionId: string, ws: import('ws').WebSocket, msgId: string) => {
         const loaded = sessionManager.loadSession(sessionId);
         if (loaded) {
+            // Validate existing background processes (they might have died while session was unloaded or via a daemon restart)
+            const validProcesses = [];
+            for (const p of loaded.backgroundProcesses) {
+                if (terminalManager.validateProcessActiveness(p.id)) {
+                    validProcesses.push(p);
+                }
+            }
+            loaded.backgroundProcesses = validProcesses;
+
             // Update the global session and engine context so new messages hit the loaded session
             session = loaded;
             engine.setSession(loaded);

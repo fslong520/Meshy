@@ -13,6 +13,13 @@ export interface BlockboardState {
     lastError: string | null;
 }
 
+export interface BackgroundProcessState {
+    id: string;
+    command: string;
+    cwd: string;
+    startedAt: string;
+}
+
 export class Session {
     public id: string;
     public title?: string;
@@ -22,6 +29,7 @@ export class Session {
     public updatedAt: string;
     public status: SessionStatus;
     public activeAgentId: string;
+    public backgroundProcesses: BackgroundProcessState[];
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -49,6 +57,7 @@ export class Session {
         this.updatedAt = now;
         this.status = 'active';
         this.activeAgentId = 'default';
+        this.backgroundProcesses = [];
     }
 
     public addMessage(message: StandardMessage) {
@@ -152,6 +161,7 @@ export class Session {
                 session.history = parsedMeta.history || [];
                 session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
                 session.activeAgentId = parsedMeta.activeAgentId || 'default';
+                session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
                 if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
                 if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
                 if (parsedMeta.status) session.status = parsedMeta.status;
@@ -164,6 +174,8 @@ export class Session {
         const session = new Session(parsedMeta.id || `session-${Date.now()}`);
         if (parsedMeta.title) session.title = parsedMeta.title;
         session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
+        session.activeAgentId = parsedMeta.activeAgentId || 'default';
+        session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
         if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
         if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
         if (parsedMeta.status) session.status = parsedMeta.status;
