@@ -57,6 +57,20 @@ export class ProviderResolver {
     }
 
     /**
+     * 获取 Fallback 模型 (Graceful Degradation)
+     */
+    public getFallbackProvider(): ILLMProvider | null {
+        if (this.config.models.fallback) {
+            try {
+                return this.resolveFromTarget(this.config.models.fallback);
+            } catch (err) {
+                console.warn(`[ProviderResolver] Failed to resolve fallback model: ${this.config.models.fallback}`);
+            }
+        }
+        return null;
+    }
+
+    /**
      * 获取支持 Embeddings 的 Provider
      */
     public getEmbeddingProvider(): ILLMProvider | null {

@@ -20,6 +20,7 @@ export type SlashCommandType =
     | 'test'       // 直接跑测试
     | 'compact'    // 压缩对话历史
     | 'model'      // 查看/切换模型
+    | 'doctor'     // 运行系统环境与依赖诊断
     | 'session'    // 会话管理 (list/save/load/archive)
     | 'workflow'   // 触发自动工作流流水线
     | 'feedback'   // 点赞/踩反馈
@@ -87,7 +88,7 @@ export interface ParsedInput {
 // ─── 常量 ───
 
 const VALID_SLASH_COMMANDS = new Set<SlashCommandType>([
-    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'model', 'help', 'feedback', 'init', 'session', 'workflow',
+    'ask', 'plan', 'clear', 'summarize', 'undo', 'test', 'compact', 'model', 'help', 'feedback', 'init', 'session', 'workflow', 'doctor',
 ]);
 
 /**

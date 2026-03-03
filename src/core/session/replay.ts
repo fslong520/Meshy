@@ -19,7 +19,7 @@ import { getLogger } from '../logger/index.js';
 export interface ReplayStep {
     index: number;
     timestamp: string;
-    role: 'system' | 'user' | 'assistant';
+    role: 'system' | 'user' | 'assistant' | 'tool';
     type: 'text' | 'tool_call' | 'tool_result';
     /** 消息文本或工具调用摘要 */
     summary: string;

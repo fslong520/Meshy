@@ -18,7 +18,7 @@ export type PermissionAction = 'allow' | 'ask' | 'deny';
 // 单个工具的权限定义字典 (如 "editFile": "allow", "run_command:git*": "allow")
 export type PermissionDict = Record<string, PermissionAction>;
 
-export const PermissionDictSchema = z.record(z.enum(['allow', 'ask', 'deny']));
+export const PermissionDictSchema = z.record(z.string(), z.enum(['allow', 'ask', 'deny']));
 
 export class PermissionNext {
     private base: PermissionDict = {};
@@ -51,8 +51,8 @@ export class PermissionNext {
     public check(actionType: ActionType, detail?: string): PermissionAction {
         const key = detail ? `${actionType}:${detail}` : actionType;
 
-        // 默认权限
-        let result: PermissionAction = 'ask';
+        // 默认匹配状态为未匹配
+        let result: PermissionAction | 'unmatched' = 'unmatched';
 
         const layers = [this.base, this.user, this.agent, this.override];
 
@@ -60,26 +60,19 @@ export class PermissionNext {
             const val = this.matchLayer(layer, actionType, detail);
             if (!val) continue;
 
-            // 如果当前结果已经是 deny，上层配置无法变更为 allow / ask
-            if (result === 'deny') {
-                continue;
-            }
-
-            // 如果当前结果是 ask，上层配置如果是 allow，依然视为起效，但如果上层级联机制严格：
-            // 设定规则: 'deny' 最强, 'ask' 次之, 'allow' 最弱。
-            // 但考虑到某些基础层可能是 allow，用户层设为 ask。那覆盖就生效。
-            if (val === 'deny') {
-                result = 'deny';
-            } else if (val === 'ask') {
-                result = 'ask';
-            } else if (val === 'allow' && result !== 'deny' && result !== 'ask') {
-                result = 'allow';
-            } else if (val === 'allow' && (result === 'deny' || result === 'ask')) {
-                // 不做任何事，不能恢复
+            if (result === 'unmatched') {
+                result = val;
+            } else if (result === 'allow') {
+                if (val === 'ask' || val === 'deny') result = val;
+            } else if (result === 'ask') {
+                if (val === 'deny') result = val;
+            } else if (result === 'deny') {
+                // stay deny
             }
         }
 
-        return result;
+        // 如果所有层都未匹配，默认视同 ask 保证安全兜底
+        return result === 'unmatched' ? 'ask' : result;
     }
 
     /** 在特定层中寻找匹配，支持通配符 */

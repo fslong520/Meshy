@@ -214,8 +214,8 @@ export class TaskEngine {
                     '  /clear            — Clear current session',
                     '  /undo             — Roll back last edit',
                     '  /test             — Run tests',
-                    '  /compact          — Compress conversation history',
                     '  /feedback <+|->   — Thumbs up/down for current session (triggers reflection)',
+                    '  /doctor           — Run system diagnostics (Node, Git, DB, etc.)',
                     '  /help             — Show this help',
                 ];
                 // Phase 15: 列出自定义命令
@@ -335,6 +335,52 @@ export class TaskEngine {
                     systemOutput += `\n\n[Error] ${e.message}`;
                 }
                 break;
+
+            case 'doctor': {
+                systemOutput = '[Slash] Running Meshy Doctor...\n';
+                try {
+                    const os = require('os');
+                    const fs = require('fs');
+                    const path = require('path');
+
+                    systemOutput += `\n[Environment]`;
+                    systemOutput += `\n- OS: ${os.type()} ${os.release()} (${os.arch()})`;
+                    systemOutput += `\n- Node.js: ${process.version}`;
+
+                    systemOutput += `\n\n[Workspace]`;
+                    systemOutput += `\n- Path: ${this.workspace.rootPath}`;
+                    const hasGit = fs.existsSync(path.join(this.workspace.rootPath, '.git'));
+                    systemOutput += `\n- Git Repository: ${hasGit ? 'YES' : 'NO'}`;
+
+                    const pjsonPath = path.join(this.workspace.rootPath, 'package.json');
+                    if (fs.existsSync(pjsonPath)) {
+                        const pjson = JSON.parse(fs.readFileSync(pjsonPath, 'utf8'));
+                        const hasVitest = pjson.devDependencies?.vitest || pjson.dependencies?.vitest;
+                        systemOutput += `\n- Vitest Installed: ${hasVitest ? 'YES' : 'NO'}`;
+                    }
+
+                    systemOutput += `\n\n[Database]`;
+                    const dbPath = path.join(this.workspace.rootPath, '.meshy', 'memory.db');
+                    if (fs.existsSync(dbPath)) {
+                        try {
+                            fs.accessSync(dbPath, fs.constants.R_OK | fs.constants.W_OK);
+                            systemOutput += `\n- SQLite DB: OK (Read/Write access)`;
+                        } catch {
+                            systemOutput += `\n- SQLite DB: ERROR (Permission denied)`;
+                        }
+                    } else {
+                        systemOutput += `\n- SQLite DB: NO (Not created yet)`;
+                    }
+
+                    systemOutput += `\n\n[Embedding]`;
+                    systemOutput += `\n- Expected Dimension: 768 (bge-base-en-v1.5)`;
+
+                    systemOutput += `\n\nDiagnostics complete.`;
+                } catch (e: any) {
+                    systemOutput += `\n\n[Error during diagnostics] ${e.message}`;
+                }
+                break;
+            }
 
             case 'compact':
                 systemOutput = '[Slash] Triggering history compaction...';
@@ -475,7 +521,7 @@ export class TaskEngine {
                     const basePrompt = builder.build();
                     const parsedArgs = InputParser.parse(command.args);
                     const injection = await this.injector.resolve(
-                        parsedArgs, decision, basePrompt, this.session, this.providerResolver,
+                        parsedArgs, decision, basePrompt, this.session, this.providerResolver, this.workspace.rootPath
                     );
 
                     // 进入正常的 LLM 推理循环
@@ -768,6 +814,13 @@ export class TaskEngine {
         let isDone = false;
         let retries = 0;
 
+        let activeLLM: import('../llm/provider.js').ILLMProvider;
+        if (injection.subagent && injection.subagent.model) {
+            activeLLM = this.providerResolver.getProvider(injection.subagent.model);
+        } else {
+            activeLLM = this.providerResolver.getProvider();
+        }
+
         while (!isDone && retries < this.maxRetries) {
             try {
                 // Phase 14: Auto-compact long sessions
@@ -792,13 +845,6 @@ export class TaskEngine {
                 }
                 const pendingToolCalls: PendingToolCall[] = [];
                 let fullResponseText = '';
-
-                let activeLLM: ILLMProvider;
-                if (injection.subagent && injection.subagent.model) {
-                    activeLLM = this.providerResolver.getProvider(injection.subagent.model);
-                } else {
-                    activeLLM = this.providerResolver.getProvider();
-                }
 
                 const responseMsgId = `msg-${Date.now()}`;
 
@@ -896,20 +942,49 @@ export class TaskEngine {
                 const message = err instanceof Error ? err.message : String(err);
                 this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
                 console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
-                this.addMessageAndAppend({
-                    role: 'user',
-                    content: `System Error: ${message}. Please self-correct or ask the user for help.`,
-                });
+
+                // Phase 14: Graceful Degradation (Fallback) Mechanism
+                // If we detect an API dropout, timeout, rate limit, or server error, we attempt a fallback.
+                const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach/i.test(message);
+
+                let fallbackTriggered = false;
+                if (isApiFailure) {
+                    const fallbackProvider = this.providerResolver.getFallbackProvider();
+                    if (fallbackProvider && activeLLM !== fallbackProvider) {
+                        console.log(`\n[Graceful Degradation] Primary LLM failed (${message}). Automatically falling back to backup provider...`);
+                        this.logger.engine(`Switching to Fallback Provider due to API error: ${message}`);
+
+                        this.addMessageAndAppend({
+                            role: 'user',
+                            content: `System Warning: Primary LLM API crashed (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
+                        });
+
+                        activeLLM = fallbackProvider;
+                        fallbackTriggered = true;
+                    }
+                }
+
+                if (!fallbackTriggered) {
+                    this.addMessageAndAppend({
+                        role: 'user',
+                        content: `System Error: ${message}. Please self-correct or ask the user for help.`,
+                    });
+                }
 
                 // Phase 19: Aggressive context compression on sequential errors
-                if (retries >= 2) {
+                if (retries >= 2 && !fallbackTriggered) {
                     try {
                         console.log(`\n[Engine] High retry count detected. Triggering forced context compaction to save context window...`);
+                        this.logger.engine('Triggering forced context compaction on retry loop.');
                         await this.compactionAgent.compact(this.session);
                     } catch (e) {
                         this.logger.error('ENGINE', `Forced compaction failed during retry loop: ${e}`);
                     }
                 }
+
+                // Exponental Backoff simulation, wait briefly before blasting the API again
+                await new Promise(res => setTimeout(res, 2000 * retries));
+
             } finally {
                 this.abortController = null;
             }

@@ -11,3 +11,4 @@ tests/
 test-*/
 public/
 .agent/
+vitest.config.ts
