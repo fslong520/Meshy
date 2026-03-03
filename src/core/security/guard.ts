@@ -28,13 +28,13 @@ export interface GuardDecision {
 // ─── Pattern Lists ───
 
 /** Tools that are always safe to execute (read-only) */
-const SAFE_TOOLS = new Set(['readFile', 'glob', 'grep', 'ls', 'readBlackboard']);
+const SAFE_TOOLS = new Set(['readFile', 'glob', 'grep', 'ls', 'readBlackboard', 'command_status']);
 
 /** Tools that modify the file system but are core editing tools */
 const EDIT_TOOLS = new Set(['writeFile', 'editFile', 'write', 'writeBlackboard']);
 
 /** Tools that can execute arbitrary code on the host system */
-const EXEC_TOOLS = new Set(['bash', 'terminal']);
+const EXEC_TOOLS = new Set(['bash', 'terminal', 'runCommand', 'send_command_input']);
 
 /** Dangerous shell command patterns (regex) */
 const DANGEROUS_COMMAND_PATTERNS = [

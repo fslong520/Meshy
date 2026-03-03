@@ -712,8 +712,14 @@ export class TaskEngine {
                 // 将必要的工具依赖注入到 Subagent
                 const injectedTools: import('../llm/provider.js').StandardTool[] = [];
                 let injectedPrompt = '';
-                for (const s of parsed.skills) {
-                    const skill = this.skillRegistry.getSkill(s.value);
+
+                const skillNamesToInject = new Set<string>([
+                    ...parsed.skills.map(s => s.value),
+                    ...(decision.suggestedSkills || [])
+                ]);
+
+                for (const sName of skillNamesToInject) {
+                    const skill = this.skillRegistry.getSkill(sName);
                     if (skill) {
                         const body = this.skillRegistry.getSkillBody(skill.name);
                         if (body) injectedPrompt += `\n--- Skill: ${skill.name} ---\n${body}`;
