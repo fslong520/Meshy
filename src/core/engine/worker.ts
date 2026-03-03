@@ -20,6 +20,7 @@ export interface WorkerOptions {
     injectedPrompt?: string;
     /** Phase 17: 是否启用隔离 Workspace（默认 false，共享主 Workspace） */
     isolateWorkspace?: boolean;
+    abortSignal?: AbortSignal;
 }
 
 /**
@@ -114,6 +115,12 @@ export class WorkerAgent {
         const llm: ILLMProvider = this.providerResolver.getProvider(this.config.model);
 
         while (!isDone && retries < this.maxRetries) {
+            if (options?.abortSignal?.aborted) {
+                console.log(`\n[WorkerAgent] @${this.config.name} execution aborted by signal.`);
+                finalReport = finalReport || 'Task cancelled by user.';
+                break;
+            }
+
             try {
                 const prompt: StandardPrompt = {
                     systemPrompt,
@@ -124,24 +131,39 @@ export class WorkerAgent {
                 const currentToolCall = { id: '', name: '', rawArgs: '' };
                 let responseText = '';
 
-                await llm.generateResponseStream(prompt, (event) => {
-                    if (event.type === 'text') {
-                        responseText += event.data;
-                        // Worker 输出加前缀或者只留在后台
-                        process.stdout.write(event.data);
-                    } else if (event.type === 'tool_call_start') {
-                        currentToolCall.id = event.data.id;
-                        currentToolCall.name = event.data.name;
-                        currentToolCall.rawArgs = '';
-                        process.stdout.write(`\n[Worker @${this.config.name}]: Calling tool "${currentToolCall.name}"...\n`);
-                    } else if (event.type === 'tool_call_chunk') {
-                        currentToolCall.rawArgs += event.data;
-                    } else if (event.type === 'done') {
-                        // isDone handles stream completion
-                    } else if (event.type === 'error') {
-                        console.error('\n[Worker StreamError]:', event.data);
+                try {
+                    await llm.generateResponseStream(prompt, (event) => {
+                        if (event.type === 'text') {
+                            responseText += event.data;
+                            // Worker 输出加前缀或者只留在后台
+                            process.stdout.write(event.data);
+                        } else if (event.type === 'tool_call_start') {
+                            currentToolCall.id = event.data.id;
+                            currentToolCall.name = event.data.name;
+                            currentToolCall.rawArgs = '';
+                            process.stdout.write(`\n[Worker @${this.config.name}]: Calling tool "${currentToolCall.name}"...\n`);
+                        } else if (event.type === 'tool_call_chunk') {
+                            currentToolCall.rawArgs += event.data;
+                        } else if (event.type === 'done') {
+                            // isDone handles stream completion
+                        } else if (event.type === 'error') {
+                            console.error('\n[Worker StreamError]:', event.data);
+                        }
+                    }, options?.abortSignal);
+                } catch (streamErr: unknown) {
+                    if (streamErr instanceof Error && streamErr.name === 'AbortError') {
+                        console.log(`\n[WorkerAgent] @${this.config.name} execution aborted (stream caught).`);
+                        finalReport = finalReport || 'Task cancelled by user.';
+                        break;
                     }
-                });
+                    throw streamErr;
+                }
+
+                if (options?.abortSignal?.aborted) {
+                    console.log(`\n[WorkerAgent] @${this.config.name} execution aborted before tool call.`);
+                    finalReport = finalReport || 'Task cancelled by user.';
+                    break;
+                }
 
                 if (!currentToolCall.id) {
                     // 没有更多工具调用，工作完成
@@ -174,6 +196,12 @@ export class WorkerAgent {
                 });
 
             } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') {
+                    console.log(`\n[WorkerAgent] @${this.config.name} execution aborted.`);
+                    finalReport = finalReport || 'Task cancelled by user.';
+                    break;
+                }
+
                 retries++;
                 const message = err instanceof Error ? err.message : String(err);
                 console.error(`\n[Worker] Error: ${message}. Retrying...`);

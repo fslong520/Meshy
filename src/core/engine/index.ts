@@ -89,6 +89,7 @@ export class TaskEngine {
     // Phase 14: Compaction Agent
     private compactionAgent: CompactionAgent;
     private abortController: AbortController | null = null;
+    public isRunning: boolean = false;
 
     // Phase 15: Custom Commands
     private customCommands: CustomCommandRegistry;
@@ -438,7 +439,10 @@ export class TaskEngine {
                                 const worker = new WorkerAgent(agentConfig, this.workspace, this.toolRegistry, this.providerResolver, workerGuard);
 
                                 const fullPrompt = `${step.promptTemplate}\n\n[Input]\n${input}`;
-                                return await worker.execute(fullPrompt, { parentSession: this.session });
+                                return await worker.execute(fullPrompt, {
+                                    parentSession: this.session,
+                                    abortSignal: this.abortController?.signal
+                                });
                             }
                         );
 
@@ -564,11 +568,28 @@ export class TaskEngine {
      * Phase 2 增强：先走 InputParser 控制语法 → IntentRouter 分类 → LazyInjector 动态组装。
      */
     public async runTask(userPrompt: string): Promise<void> {
+        if (this.isRunning) {
+            console.log(`[Engine] Mission already in progress. Ignoring new input: ${userPrompt}`);
+            this.daemon?.broadcast('agent:text', { text: '\n[System]: A task is currently running. Please wait or stop it first.\n', id: `sys-${Date.now()}` });
+            return;
+        }
+
+        this.isRunning = true;
+        this.abortController = new AbortController();
+
+        try {
+            await this._runTaskInternal(userPrompt);
+        } finally {
+            this.isRunning = false;
+        }
+    }
+
+    private async _runTaskInternal(userPrompt: string): Promise<void> {
         // Phase 4: 初始化记忆库
         await this.workspace.memoryStore.initialize();
-        +
-            // Phase 5: 启动开机自启的 MCP Servers
-            await this.workspace.mcpHost.ensureAutoStartServers();
+
+        // Phase 5: 启动开机自启的 MCP Servers
+        await this.workspace.mcpHost.ensureAutoStartServers();
 
         // ── Phase 2: 输入语法解析 ──
         const parsed = InputParser.parse(userPrompt);
@@ -736,7 +757,8 @@ export class TaskEngine {
                 const report = await worker.execute(parsed.cleanText, {
                     parentSession: this.session,
                     injectedTools,
-                    injectedPrompt
+                    injectedPrompt,
+                    abortSignal: this.abortController?.signal
                 });
 
                 // Orchestrator 收集汇报
@@ -776,6 +798,23 @@ export class TaskEngine {
      * 直接进入带有额外系统提示的 LLM 推理循环。
      */
     public async resumeTask(): Promise<void> {
+        if (this.isRunning) {
+            console.log(`[Engine] Mission already in progress. Ignoring resume request.`);
+            this.daemon?.broadcast('agent:text', { text: '\n[System]: A task is currently running. Please wait or stop it first.\n', id: `sys-${Date.now()}` });
+            return;
+        }
+
+        this.isRunning = true;
+        this.abortController = new AbortController();
+
+        try {
+            await this._resumeTaskInternal();
+        } finally {
+            this.isRunning = false;
+        }
+    }
+
+    private async _resumeTaskInternal(): Promise<void> {
         console.log(`[Engine] Resuming interrupted session: ${this.session.id}`);
         this.logger.engine(`Resuming interrupted session: ${this.session.id}`);
 
@@ -827,182 +866,189 @@ export class TaskEngine {
             activeLLM = this.providerResolver.getProvider();
         }
 
-        while (!isDone && retries < this.maxRetries) {
-            try {
-                // Phase 14: Auto-compact long sessions
-                if (this.compactionAgent.shouldCompact(this.session)) {
-                    this.logger.engine('Session exceeds compaction threshold, auto-compacting...');
-                    await this.compactionAgent.compact(this.session);
+        try {
+            while (!isDone && retries < this.maxRetries) {
+                if (this.abortController?.signal.aborted) {
+                    console.log('\n[Engine] Loop aborted by signal.');
+                    break;
                 }
-                const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
-                const mcpTools = this.workspace.mcpHost.getAllTools();
-                const allTools = [...registryTools, ...mcpTools, ...injection.tools];
 
-                const prompt: StandardPrompt = {
-                    systemPrompt: injection.systemPrompt,
-                    messages: this.session.history,
-                    tools: allTools,
-                };
-
-                interface PendingToolCall {
-                    id: string;
-                    name: string;
-                    rawArgs: string;
-                }
-                const pendingToolCalls: PendingToolCall[] = [];
-                let fullResponseText = '';
-
-                const responseMsgId = `msg-${Date.now()}`;
-
-                this.abortController = new AbortController();
-
-                await activeLLM.generateResponseStream(prompt, (event) => {
-                    if (event.type === 'text') {
-                        fullResponseText += event.data;
-                        process.stdout.write(event.data);
-                        this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId });
-                    } else if (event.type === 'tool_call_start') {
-                        const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
-                        pendingToolCalls.push(newCall);
-                        process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
-                        this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
-                        this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
-                    } else if (event.type === 'tool_call_chunk') {
-                        if (pendingToolCalls.length > 0) {
-                            const pendingObj = pendingToolCalls[pendingToolCalls.length - 1];
-                            pendingObj.rawArgs += event.data;
-                            // Optionally broadcast the accumulated args to the frontend for streaming
-                            this.daemon?.broadcast('agent:tool_call', { id: pendingObj.id, name: pendingObj.name, args: pendingObj.rawArgs });
-                        }
-                    } else if (event.type === 'done') {
-                        isDone = true;
-                    } else if (event.type === 'error') {
-                        console.error('\n[StreamError]:', event.data);
+                try {
+                    // Phase 14: Auto-compact long sessions
+                    if (this.compactionAgent.shouldCompact(this.session)) {
+                        this.logger.engine('Session exceeds compaction threshold, auto-compacting...');
+                        await this.compactionAgent.compact(this.session);
                     }
-                });
+                    const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
+                    const mcpTools = this.workspace.mcpHost.getAllTools();
+                    const allTools = [...registryTools, ...mcpTools, ...injection.tools];
 
-                if (pendingToolCalls.length === 0) {
-                    this.addMessageAndAppend({ role: 'assistant', content: fullResponseText });
-                    isDone = true;
-                    break;
-                }
+                    const prompt: StandardPrompt = {
+                        systemPrompt: injection.systemPrompt,
+                        messages: this.session.history,
+                        tools: allTools,
+                    };
 
-                isDone = false;
+                    interface PendingToolCall {
+                        id: string;
+                        name: string;
+                        rawArgs: string;
+                    }
+                    const pendingToolCalls: PendingToolCall[] = [];
+                    let fullResponseText = '';
 
-                // 1. Add ALL tool_call messages to history first
-                for (const call of pendingToolCalls) {
-                    const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
-                    this.addMessageAndAppend({
-                        role: 'assistant',
-                        content: {
-                            type: 'tool_call',
-                            id: call.id,
-                            name: call.name,
-                            arguments: parsedArgs,
-                        },
+                    const responseMsgId = `msg-${Date.now()}`;
+
+                    this.abortController = new AbortController();
+
+                    await activeLLM.generateResponseStream(prompt, (event) => {
+                        if (event.type === 'text') {
+                            fullResponseText += event.data;
+                            process.stdout.write(event.data);
+                            this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId });
+                        } else if (event.type === 'tool_call_start') {
+                            const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
+                            pendingToolCalls.push(newCall);
+                            process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
+                            this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
+                            this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
+                        } else if (event.type === 'tool_call_chunk') {
+                            if (pendingToolCalls.length > 0) {
+                                const pendingObj = pendingToolCalls[pendingToolCalls.length - 1];
+                                pendingObj.rawArgs += event.data;
+                                // Optionally broadcast the accumulated args to the frontend for streaming
+                                this.daemon?.broadcast('agent:tool_call', { id: pendingObj.id, name: pendingObj.name, args: pendingObj.rawArgs });
+                            }
+                        } else if (event.type === 'done') {
+                            isDone = true;
+                        } else if (event.type === 'error') {
+                            console.error('\n[StreamError]:', event.data);
+                        }
                     });
-                }
 
-                // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
-                this.workspace.snapshotManager.appendStateUpdate(this.session);
+                    if (pendingToolCalls.length === 0) {
+                        this.addMessageAndAppend({ role: 'assistant', content: fullResponseText });
+                        isDone = true;
+                        break;
+                    }
 
-                // 2. Execute ALL tools concurrently
-                const executionPromises = pendingToolCalls.map(async (call) => {
-                    const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
-                    this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
-                    const result = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
-                    this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
-                    return { id: call.id, result };
-                });
+                    isDone = false;
 
-                const results = await Promise.all(executionPromises);
+                    // 1. Add ALL tool_call messages to history first
+                    for (const call of pendingToolCalls) {
+                        const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
+                        this.addMessageAndAppend({
+                            role: 'assistant',
+                            content: {
+                                type: 'tool_call',
+                                id: call.id,
+                                name: call.name,
+                                arguments: parsedArgs,
+                            },
+                        });
+                    }
 
-                // 3. Add ALL tool_result messages to history in order
-                for (const { id, result } of results) {
-                    this.addMessageAndAppend({
-                        role: 'user',
-                        content: {
-                            type: 'tool_result',
-                            id: id,
-                            content: result,
-                        },
+                    // Phase 5: 在真正执行 Tool 前，持久化内存现场。防止工具死锁或 OS 宕机。
+                    this.workspace.snapshotManager.appendStateUpdate(this.session);
+
+                    // 2. Execute ALL tools concurrently
+                    const executionPromises = pendingToolCalls.map(async (call) => {
+                        const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
+                        this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
+                        const result = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
+                        this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
+                        return { id: call.id, result };
                     });
-                }
 
-                // Phase 5: 响应也写入快照
-                this.workspace.snapshotManager.appendStateUpdate(this.session);
+                    const results = await Promise.all(executionPromises);
 
-            } catch (err: unknown) {
-                if ((err as any).isSandboxRejection) {
-                    this.logger.error('ENGINE', `Action denied by Sandbox. Aborting execution loop.`);
-                    console.log(`\n[Engine] Action denied by Sandbox. Aborting execution loop.`);
-                    this.addMessageAndAppend({
-                        role: 'user',
-                        content: `System Warning: ${(err as Error).message}. Execution aborted by user/sandbox.`
-                    });
-                    this.interrupt();
-                    break;
-                }
-
-                retries++;
-                const message = err instanceof Error ? err.message : String(err);
-                this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
-                console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
-
-                // Phase 14: Graceful Degradation (Fallback) Mechanism
-                // If we detect an API dropout, timeout, rate limit, or server error, we attempt a fallback.
-                const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach/i.test(message);
-
-                let fallbackTriggered = false;
-                if (isApiFailure) {
-                    const fallbackProvider = this.providerResolver.getFallbackProvider();
-                    if (fallbackProvider && activeLLM !== fallbackProvider) {
-                        console.log(`\n[Graceful Degradation] Primary LLM failed (${message}). Automatically falling back to backup provider...`);
-                        this.logger.engine(`Switching to Fallback Provider due to API error: ${message}`);
-
+                    // 3. Add ALL tool_result messages to history in order
+                    for (const { id, result } of results) {
                         this.addMessageAndAppend({
                             role: 'user',
-                            content: `System Warning: Primary LLM API crashed (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
+                            content: {
+                                type: 'tool_result',
+                                id: id,
+                                content: result,
+                            },
                         });
-
-                        activeLLM = fallbackProvider;
-                        fallbackTriggered = true;
                     }
-                }
 
-                if (!fallbackTriggered) {
-                    this.addMessageAndAppend({
-                        role: 'user',
-                        content: `System Error: ${message}. Please self-correct or ask the user for help.`,
-                    });
-                }
+                    // Phase 5: 响应也写入快照
+                    this.workspace.snapshotManager.appendStateUpdate(this.session);
 
-                // Phase 19: Aggressive context compression on sequential errors
-                if (retries >= 2 && !fallbackTriggered) {
-                    try {
-                        console.log(`\n[Engine] High retry count detected. Triggering forced context compaction to save context window...`);
-                        this.logger.engine('Triggering forced context compaction on retry loop.');
-                        await this.compactionAgent.compact(this.session);
-                    } catch (e) {
-                        this.logger.error('ENGINE', `Forced compaction failed during retry loop: ${e}`);
+                } catch (err: unknown) {
+                    if ((err as any).isSandboxRejection) {
+                        this.logger.error('ENGINE', `Action denied by Sandbox. Aborting execution loop.`);
+                        console.log(`\n[Engine] Action denied by Sandbox. Aborting execution loop.`);
+                        this.addMessageAndAppend({
+                            role: 'user',
+                            content: `System Warning: ${(err as Error).message}. Execution aborted by user/sandbox.`
+                        });
+                        this.interrupt();
+                        break;
                     }
+
+                    retries++;
+                    const message = err instanceof Error ? err.message : String(err);
+                    this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
+                    console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
+
+                    // Phase 14: Graceful Degradation (Fallback) Mechanism
+                    // If we detect an API dropout, timeout, rate limit, or server error, we attempt a fallback.
+                    const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach/i.test(message);
+
+                    let fallbackTriggered = false;
+                    if (isApiFailure) {
+                        const fallbackProvider = this.providerResolver.getFallbackProvider();
+                        if (fallbackProvider && activeLLM !== fallbackProvider) {
+                            console.log(`\n[Graceful Degradation] Primary LLM failed (${message}). Automatically falling back to backup provider...`);
+                            this.logger.engine(`Switching to Fallback Provider due to API error: ${message}`);
+
+                            this.addMessageAndAppend({
+                                role: 'user',
+                                content: `System Warning: Primary LLM API crashed (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
+                            });
+
+                            activeLLM = fallbackProvider;
+                            fallbackTriggered = true;
+                        }
+                    }
+
+                    if (!fallbackTriggered) {
+                        this.addMessageAndAppend({
+                            role: 'user',
+                            content: `System Error: ${message}. Please self-correct or ask the user for help.`,
+                        });
+                    }
+
+                    // Phase 19: Aggressive context compression on sequential errors
+                    if (retries >= 2 && !fallbackTriggered) {
+                        try {
+                            console.log(`\n[Engine] High retry count detected. Triggering forced context compaction to save context window...`);
+                            this.logger.engine('Triggering forced context compaction on retry loop.');
+                            await this.compactionAgent.compact(this.session);
+                        } catch (e) {
+                            this.logger.error('ENGINE', `Forced compaction failed during retry loop: ${e}`);
+                        }
+                    }
+
+                    // Exponental Backoff simulation, wait briefly before blasting the API again
+                    await new Promise(res => setTimeout(res, 2000 * retries));
+
+                } finally {
+                    this.abortController = null;
                 }
-
-                // Exponental Backoff simulation, wait briefly before blasting the API again
-                await new Promise(res => setTimeout(res, 2000 * retries));
-
-            } finally {
-                this.abortController = null;
             }
-        }
 
-        if (retries >= this.maxRetries) {
-            console.warn('\n[Engine] Max retries reached. Task suspended.');
+            if (retries >= this.maxRetries) {
+                console.warn('\n[Engine] Max retries reached. Task suspended.');
+            }
+        } finally {
+            this.session.clearActivatedTools();
+            this.daemon?.broadcast('agent:done', {});
+            this.workspace.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
         }
-
-        this.session.clearActivatedTools();
-        this.daemon?.broadcast('agent:done', {});
-        this.workspace.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });
     }
 
     /**
