@@ -99,9 +99,17 @@ export class SystemPromptBuilder {
         return this;
     }
 
-    /** 注入系统环境信息 (Phase 27) */
+    /** 注入系统环境信息 (Phase 27, enhanced) */
     withEnvironmentContext(osPlatform: string, workspaceRoot: string): this {
-        this.environmentContext = `\n[Environment Context]\nOperating System: ${osPlatform}\nWorkspace Root: ${workspaceRoot}\nYou are running inside Meshy Daemon. Read files and execute local commands cautiously; do not guess syntax or assume file existence.\n`;
+        const today = new Date().toDateString();
+        this.environmentContext = [
+            `\n<env>`,
+            `  Working directory: ${workspaceRoot}`,
+            `  Platform: ${osPlatform}`,
+            `  Today's date: ${today}`,
+            `</env>`,
+            `Read files and execute local commands cautiously; do not guess syntax or assume file existence.`,
+        ].join('\n');
         return this;
     }
 
