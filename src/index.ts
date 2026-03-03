@@ -308,6 +308,12 @@ export async function runServer(port: number) {
             engine.setSession(session);
 
             console.log(`[Meshy] Switched daemon workspace context to: ${targetPath}`);
+            const mcpCount = activeWorkspace.mcpHost.getServerList().filter(s => s.enabled).length;
+            if (mcpCount === 0) {
+                console.log(`[Meshy] Notice: The new workspace '${path.basename(targetPath)}' has no enabled MCP servers configured in .agent/mcp.json`);
+            } else {
+                console.log(`[Meshy] Notice: Found ${mcpCount} enabled MCP server(s) in workspace '${path.basename(targetPath)}'`);
+            }
 
             const replay = exportReplay(session);
             daemon.sendResponse(ws, msgId, {
@@ -481,7 +487,12 @@ export async function runServer(port: number) {
 
     daemon.on('agent:list', (ws, msgId) => {
         const subagentRegistry = engine.getSubagentRegistry();
-        const agents = subagentRegistry.listAgents();
+        const agents = subagentRegistry.listAgents().map(a => ({
+            id: a.name,
+            name: a.name,
+            description: a.description,
+            emoji: a.emoji
+        }));
         daemon.sendResponse(ws, msgId, {
             agents,
             activeAgentId: session.activeAgentId

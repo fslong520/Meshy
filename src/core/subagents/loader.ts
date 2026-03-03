@@ -22,22 +22,34 @@ function resolvePresetsDir(): string {
     const candidates: string[] = [];
 
     // 方案 1: 基于 __dirname（CJS 或 tsup 注入）
-    if (typeof __dirname !== 'undefined') {
-        candidates.push(path.resolve(__dirname, '..', 'agents', 'presets'));
-    }
+    try {
+        if (typeof __dirname !== 'undefined') {
+            candidates.push(path.resolve(__dirname, '..', 'agents', 'presets'));
+        }
+    } catch { /* ignore */ }
 
-    // 方案 2: 基于 process.argv[1]
+    // 方案 2: 基于 process.argv[1] (ts-node / node 执行)
     if (process.argv[1]) {
-        candidates.push(path.resolve(path.dirname(process.argv[1]), 'core', 'agents', 'presets'));
+        try {
+            const argvDir = path.dirname(process.argv[1]);
+            candidates.push(path.resolve(argvDir, 'core', 'agents', 'presets'));
+            candidates.push(path.resolve(argvDir, '..', 'src', 'core', 'agents', 'presets'));
+        } catch { /* ignore */ }
     }
 
     // 方案 3: 基于 cwd (开发模式 fallback)
     candidates.push(path.resolve(process.cwd(), 'src', 'core', 'agents', 'presets'));
+    candidates.push(path.resolve(process.cwd(), 'core', 'agents', 'presets'));
 
     for (const dir of candidates) {
-        if (fs.existsSync(dir)) return dir;
+        if (fs.existsSync(dir)) {
+            console.log(`[SubagentRegistry] Found presets directory: ${dir}`);
+            return dir;
+        }
     }
-    return candidates[0];
+
+    console.warn(`[SubagentRegistry] No presets directory found. Candidates tried: ${candidates.join(', ')}`);
+    return candidates[0] || '';
 }
 
 // ─── Subagent 配置 ───
@@ -181,35 +193,43 @@ export class SubagentRegistry {
      * 扫描指定目录下的所有 .md 文件，解析为 SubagentConfig 并注册。
      */
     private scanDirectory(dir: string, isPreset: boolean): void {
-        if (!fs.existsSync(dir)) return;
+        if (!dir || !fs.existsSync(dir)) {
+            if (isPreset) console.warn(`[SubagentRegistry] Directory not found: ${dir}`);
+            return;
+        }
 
         const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+        console.log(`[SubagentRegistry] Scanning ${dir}, found ${files.length} agents`);
 
         for (const file of files) {
-            const filePath = path.join(dir, file);
-            const raw = fs.readFileSync(filePath, 'utf8');
-            const { meta, body } = parseFrontmatter(raw);
+            try {
+                const filePath = path.join(dir, file);
+                const raw = fs.readFileSync(filePath, 'utf8');
+                const { meta, body } = parseFrontmatter(raw);
 
-            const name = (typeof meta.name === 'string' ? meta.name : file.replace(/\.md$/, ''));
+                const name = (typeof meta.name === 'string' ? meta.name : file.replace(/\.md$/, ''));
 
-            const config: SubagentConfig = {
-                name,
-                model: typeof meta.model === 'string' ? meta.model : 'default',
-                allowedTools: toStringArray(meta['allowed-tools']),
-                description: typeof meta.description === 'string' ? meta.description : '',
-                systemPrompt: body,
-                filePath,
-                triggerKeywords: toStringArray(meta['trigger-keywords']),
-                maxContextMessages: typeof meta['max-context-messages'] === 'number'
-                    ? meta['max-context-messages']
-                    : 6,
-                reportFormat: meta['report-format'] === 'json' ? 'json' : 'text',
-                emoji: typeof meta.emoji === 'string' ? meta.emoji : '🤖',
-                contextInject: toStringArray(meta['context-inject']),
-                isPreset,
-            };
+                const config: SubagentConfig = {
+                    name,
+                    model: typeof meta.model === 'string' ? meta.model : 'default',
+                    allowedTools: toStringArray(meta['allowed-tools']),
+                    description: typeof meta.description === 'string' ? meta.description : '',
+                    systemPrompt: body,
+                    filePath,
+                    triggerKeywords: toStringArray(meta['trigger-keywords']),
+                    maxContextMessages: typeof meta['max-context-messages'] === 'number'
+                        ? meta['max-context-messages']
+                        : 6,
+                    reportFormat: meta['report-format'] === 'json' ? 'json' : 'text',
+                    emoji: typeof meta.emoji === 'string' ? meta.emoji : '🤖',
+                    contextInject: toStringArray(meta['context-inject']),
+                    isPreset,
+                };
 
-            this.agents.set(name, config);
+                this.agents.set(name, config);
+            } catch (err: any) {
+                console.error(`[SubagentRegistry] Failed to parse agent file ${file}:`, err.message);
+            }
         }
     }
 

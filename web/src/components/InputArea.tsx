@@ -131,10 +131,11 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
         // Show entities within the selected namespace
         return mentionItems
             .filter(item => item.namespace === mentionParsed.namespace)
-            .filter(item =>
-                item.name.toLowerCase().includes(mentionParsed.entityFilter) ||
-                item.label.toLowerCase().includes(mentionParsed.entityFilter)
-            )
+            .filter(item => {
+                const nameMatch = item.name?.toLowerCase().includes(mentionParsed.entityFilter) ?? false;
+                const labelMatch = item.label?.toLowerCase().includes(mentionParsed.entityFilter) ?? false;
+                return nameMatch || labelMatch;
+            })
     }, [mentionParsed, mentionItems])
 
     const applyCommand = (cmdName: string) => {

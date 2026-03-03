@@ -101,12 +101,18 @@ export class McpHostRuntime {
             const configs: McpServerConfig[] = JSON.parse(raw);
 
             for (const config of configs) {
+                const enabled = config.enabled !== false; // 默认 true
+
+                if (!enabled) {
+                    console.log(`[MCP] Server "${config.name}" is disabled in mcp.json and will be skipped.`);
+                }
+
                 this.servers.set(config.name, {
                     config,
                     process: null,
                     tools: [],
                     status: 'stopped',
-                    enabled: config.enabled !== false, // 默认 true
+                    enabled,
                 });
             }
 
