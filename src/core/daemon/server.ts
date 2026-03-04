@@ -75,6 +75,7 @@ export class DaemonServer extends EventEmitter {
     private wss: WebSocketServer | null = null;
     private httpServer: http.Server | null = null;
     private clients: Set<WebSocket> = new Set();
+    private sseClients: Set<http.ServerResponse> = new Set();
     private port: number;
 
     /** 用于存放等待人类审批的 Promise resolve 回调 */
@@ -86,7 +87,7 @@ export class DaemonServer extends EventEmitter {
     }
 
     /**
-     * 启动 HTTP 静态服务 + WebSocket 守护进程。
+     * 启动 HTTP 静态服务 + WebSocket + SSE 守护进程。
      */
     public start(): void {
         const publicDir = resolvePublicDir();
@@ -110,6 +111,63 @@ export class DaemonServer extends EventEmitter {
             };
 
             const urlPath = (req.url || '/').split('?')[0]; // strip query string
+
+            // ── SSE 事件流端点（仿 opencode /event）──
+            if (urlPath === '/events' && req.method === 'GET') {
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no',       // 禁止 Nginx 等反代缓冲
+                    'X-Content-Type-Options': 'nosniff',
+                });
+
+                // 发送连接成功事件
+                res.write(`data: ${JSON.stringify({ type: 'event', name: 'server.connected', data: {} })}\n\n`);
+
+                this.sseClients.add(res);
+                console.log(`[Daemon] SSE client connected. Total: ${this.sseClients.size}`);
+
+                // 心跳：每 15 秒发送，防止代理或浏览器超时断开
+                const heartbeat = setInterval(() => {
+                    if (!res.writableEnded) {
+                        res.write(`: heartbeat\n\n`);
+                    }
+                }, 15_000);
+
+                req.on('close', () => {
+                    clearInterval(heartbeat);
+                    this.sseClients.delete(res);
+                    console.log(`[Daemon] SSE client disconnected. Total: ${this.sseClients.size}`);
+                });
+
+                return;
+            }
+
+            // ── JSON-RPC over HTTP POST ──
+            if (urlPath === '/rpc' && req.method === 'POST') {
+                let body = '';
+                req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const msg: RpcMessage = JSON.parse(body);
+                        // 创建一个假的 "ws" 对象来兼容现有的 handleClientMessage
+                        const fakeWs = {
+                            readyState: 1, // WebSocket.OPEN
+                            send: (payload: string) => {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                res.end(payload);
+                            },
+                        } as unknown as WebSocket;
+                        this.handleClientMessage(fakeWs, msg);
+                    } catch {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                    }
+                });
+                return;
+            }
+
             let filePath = path.join(publicDir, urlPath === '/' ? 'index.html' : urlPath);
             const extname = path.extname(filePath);
             const contentType = MIME[extname] || 'application/octet-stream';
@@ -151,7 +209,7 @@ export class DaemonServer extends EventEmitter {
 
         this.wss.on('connection', (ws) => {
             this.clients.add(ws);
-            console.log(`[Daemon] Client connected. Total: ${this.clients.size}`);
+            console.log(`[Daemon] WS client connected. Total: ${this.clients.size}`);
 
             ws.on('message', (raw) => {
                 try {
@@ -164,7 +222,7 @@ export class DaemonServer extends EventEmitter {
 
             ws.on('close', () => {
                 this.clients.delete(ws);
-                console.log(`[Daemon] Client disconnected. Total: ${this.clients.size}`);
+                console.log(`[Daemon] WS client disconnected. Total: ${this.clients.size}`);
             });
         });
 
@@ -197,9 +255,19 @@ export class DaemonServer extends EventEmitter {
         };
 
         const payload = JSON.stringify(msg);
+
+        // WebSocket clients (legacy, still supported)
         for (const client of this.clients) {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(payload);
+            }
+        }
+
+        // SSE clients (primary, no ghost connection issues)
+        const sseData = `data: ${payload}\n\n`;
+        for (const res of this.sseClients) {
+            if (!res.writableEnded) {
+                res.write(sseData);
             }
         }
     }

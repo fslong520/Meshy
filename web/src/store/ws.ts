@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 export interface RpcMessage {
     id?: string;
     type: 'request' | 'response' | 'event';
-    method: string;
+    method?: string;
     params?: Record<string, unknown>;
     result?: unknown;
     error?: string;
@@ -46,32 +46,29 @@ let callIdCounter = 1;
 const pendingCallbacks = new Map<string, (result: unknown) => void>();
 const eventHandlers = new Map<string, Set<EventHandler>>();
 
+// ─── SSE: 用于接收服务端事件（单向，仿 opencode /event）───
+let sseSource: EventSource | null = null;
+
+// ─── WebSocket: 仅用于发送 RPC 请求 ───
 let wsInstance: WebSocket | null = null;
 
-let reconnectTimer: any = null;
+/**
+ * 连接到后端 SSE 事件流。
+ * EventSource 由浏览器原生管理，自带断线重连，不会因 HMR / StrictMode 产生幽灵连接。
+ */
+function connectSSE(url: string, onStatusChange: (s: boolean) => void): EventSource {
+    const es = new EventSource(url);
 
-function connectWs(url: string, onStatusChange: (s: boolean) => void): WebSocket {
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
-
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
+    es.onopen = () => {
         onStatusChange(true);
     };
 
-    ws.onclose = () => {
+    es.onerror = () => {
         onStatusChange(false);
-        if ((ws as any).intentionalClose) return;
-        // 自动重连
-        reconnectTimer = setTimeout(() => {
-            wsInstance = connectWs(url, onStatusChange);
-        }, 3000);
+        // EventSource 自动在内部断线重连，无需手动 setTimeout
     };
 
-    ws.onmessage = (event) => {
+    es.onmessage = (event) => {
         try {
             const msg: RpcMessage = JSON.parse(event.data);
 
@@ -93,6 +90,40 @@ function connectWs(url: string, onStatusChange: (s: boolean) => void): WebSocket
             allHandlers?.forEach((h) => h(msg));
         } catch {
             // 忽略不合法的消息
+        }
+    };
+
+    return es;
+}
+
+/**
+ * 连接到后端 WebSocket（仅用于发送 RPC 请求）。
+ */
+function connectWs(url: string): WebSocket {
+    const ws = new WebSocket(url);
+
+    ws.onmessage = (event) => {
+        try {
+            const msg: RpcMessage = JSON.parse(event.data);
+            // WebSocket 现在只处理 RPC 响应（不再接收事件，事件走 SSE）
+            if (msg.type === 'response' && msg.id) {
+                const cb = pendingCallbacks.get(msg.id);
+                if (cb) {
+                    cb(msg.result);
+                    pendingCallbacks.delete(msg.id);
+                }
+            }
+        } catch {
+            // 忽略
+        }
+    };
+
+    ws.onclose = () => {
+        // WebSocket 用于 RPC，断线后自动重连
+        if (!(ws as any).intentionalClose) {
+            setTimeout(() => {
+                wsInstance = connectWs(url);
+            }, 3000);
         }
     };
 
@@ -124,7 +155,9 @@ export function onEvent(eventName: string, handler: EventHandler): () => void {
 }
 
 /**
- * React Hook: 管理 WebSocket 连接生命周期。
+ * React Hook: 管理 SSE + WebSocket 连接生命周期。
+ * - SSE (`EventSource`): 接收服务端事件流（单向，不会因 HMR 产生幽灵连接）
+ * - WebSocket: 仅用于发送 RPC 请求
  */
 export function useWebSocket() {
     const [connected, setConnected] = useState(false);
@@ -135,11 +168,20 @@ export function useWebSocket() {
         initialized.current = true;
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${protocol}//${window.location.host}/ws`;
-        wsInstance = connectWs(url, setConnected);
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        const sseUrl = `${window.location.origin}/events`;
+
+        // SSE: 接收所有服务端事件
+        sseSource = connectSSE(sseUrl, setConnected);
+
+        // WebSocket: 仅用于发送 RPC 请求
+        wsInstance = connectWs(wsUrl);
 
         return () => {
-            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (sseSource) {
+                sseSource.close();
+                sseSource = null;
+            }
             if (wsInstance) {
                 (wsInstance as any).intentionalClose = true;
                 wsInstance.close();
