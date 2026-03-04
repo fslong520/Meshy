@@ -127,7 +127,8 @@ export class OpenAIAdapter implements ILLMProvider {
             }, { signal: abortSignal });
 
             let currentToolCallId: string | undefined;
-            let lastEmittedText = ''; // Track emitted text for cumulative stream detection
+            let lastEmittedText = '';
+            let isCumulativeStream: boolean | undefined = undefined;
 
             for await (const chunk of stream) {
                 const choice = chunk.choices[0];
@@ -141,14 +142,47 @@ export class OpenAIAdapter implements ILLMProvider {
 
                 if (choice.delta.content) {
                     const newText = choice.delta.content;
-                    // Detect if the provider is incorrectly sending cumulative text instead of deltas
-                    if (newText.startsWith(lastEmittedText) && newText !== lastEmittedText && lastEmittedText.length > 0) {
-                        const actualDelta = newText.slice(lastEmittedText.length);
-                        onEvent({ type: 'text', data: actualDelta });
-                        lastEmittedText = newText;
-                    } else if (newText.length > 0) {
-                        onEvent({ type: 'text', data: newText });
-                        lastEmittedText += newText;
+
+                    if (newText.length > 0) {
+                        if (isCumulativeStream === undefined) {
+                            if (lastEmittedText.length === 0) {
+                                lastEmittedText = newText;
+                                onEvent({ type: 'text', data: newText });
+                                continue;
+                            } else {
+                                if (newText.length > lastEmittedText.length && newText.startsWith(lastEmittedText)) {
+                                    isCumulativeStream = true;
+                                } else if (newText !== lastEmittedText) {
+                                    isCumulativeStream = false;
+                                }
+                                // If newText === lastEmittedText, remain undefined, and fall through to act like cumulative (ignore duplicate) to avoid corrupting the history.
+                            }
+                        }
+
+                        if (isCumulativeStream === true || isCumulativeStream === undefined) {
+                            if (newText === lastEmittedText) {
+                                // Ignore duplicate
+                                continue;
+                            } else if (newText.startsWith(lastEmittedText)) {
+                                const actualDelta = newText.slice(lastEmittedText.length);
+                                onEvent({ type: 'text', data: actualDelta });
+                                lastEmittedText = newText;
+                            } else {
+                                if (isCumulativeStream === undefined) {
+                                    // It didn't start with history, so it must be a delta stream after all!
+                                    isCumulativeStream = false;
+                                    onEvent({ type: 'text', data: newText });
+                                    lastEmittedText += newText;
+                                } else {
+                                    // Forced fallback in true cumulative mode
+                                    onEvent({ type: 'text', data: newText });
+                                    lastEmittedText += newText;
+                                }
+                            }
+                        } else {
+                            onEvent({ type: 'text', data: newText });
+                            lastEmittedText += newText;
+                        }
                     }
                 }
 
