@@ -48,10 +48,14 @@ const eventHandlers = new Map<string, Set<EventHandler>>();
 
 let wsInstance: WebSocket | null = null;
 
-/**
- * 连接到后端 WebSocket 守护进程。
- */
+let reconnectTimer: any = null;
+
 function connectWs(url: string, onStatusChange: (s: boolean) => void): WebSocket {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+
     const ws = new WebSocket(url);
 
     ws.onopen = () => {
@@ -60,8 +64,9 @@ function connectWs(url: string, onStatusChange: (s: boolean) => void): WebSocket
 
     ws.onclose = () => {
         onStatusChange(false);
+        if ((ws as any).intentionalClose) return;
         // 自动重连
-        setTimeout(() => {
+        reconnectTimer = setTimeout(() => {
             wsInstance = connectWs(url, onStatusChange);
         }, 3000);
     };
@@ -134,8 +139,12 @@ export function useWebSocket() {
         wsInstance = connectWs(url, setConnected);
 
         return () => {
-            wsInstance?.close();
-            wsInstance = null;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (wsInstance) {
+                (wsInstance as any).intentionalClose = true;
+                wsInstance.close();
+                wsInstance = null;
+            }
             initialized.current = false;
         };
     }, []);
