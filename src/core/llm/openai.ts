@@ -127,6 +127,7 @@ export class OpenAIAdapter implements ILLMProvider {
             }, { signal: abortSignal });
 
             let currentToolCallId: string | undefined;
+            let lastEmittedText = ''; // Track emitted text for cumulative stream detection
 
             for await (const chunk of stream) {
                 const choice = chunk.choices[0];
@@ -139,7 +140,16 @@ export class OpenAIAdapter implements ILLMProvider {
                 }
 
                 if (choice.delta.content) {
-                    onEvent({ type: 'text', data: choice.delta.content });
+                    const newText = choice.delta.content;
+                    // Detect if the provider is incorrectly sending cumulative text instead of deltas
+                    if (newText.startsWith(lastEmittedText) && newText !== lastEmittedText && lastEmittedText.length > 0) {
+                        const actualDelta = newText.slice(lastEmittedText.length);
+                        onEvent({ type: 'text', data: actualDelta });
+                        lastEmittedText = newText;
+                    } else if (newText.length > 0) {
+                        onEvent({ type: 'text', data: newText });
+                        lastEmittedText += newText;
+                    }
                 }
 
                 if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
