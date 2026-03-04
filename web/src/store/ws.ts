@@ -43,14 +43,10 @@ export interface ApprovalInfo {
 type EventHandler = (msg: RpcMessage) => void;
 
 let callIdCounter = 1;
-const pendingCallbacks = new Map<string, (result: unknown) => void>();
 const eventHandlers = new Map<string, Set<EventHandler>>();
 
 // ─── SSE: 用于接收服务端事件（单向，仿 opencode /event）───
 let sseSource: EventSource | null = null;
-
-// ─── WebSocket: 仅用于发送 RPC 请求 ───
-let wsInstance: WebSocket | null = null;
 
 /**
  * 连接到后端 SSE 事件流。
@@ -72,14 +68,6 @@ function connectSSE(url: string, onStatusChange: (s: boolean) => void): EventSou
         try {
             const msg: RpcMessage = JSON.parse(event.data);
 
-            if (msg.type === 'response' && msg.id) {
-                const cb = pendingCallbacks.get(msg.id);
-                if (cb) {
-                    cb(msg.result);
-                    pendingCallbacks.delete(msg.id);
-                }
-            }
-
             if (msg.type === 'event' && msg.name) {
                 const handlers = eventHandlers.get(msg.name);
                 handlers?.forEach((h) => h(msg));
@@ -97,48 +85,28 @@ function connectSSE(url: string, onStatusChange: (s: boolean) => void): EventSou
 }
 
 /**
- * 连接到后端 WebSocket（仅用于发送 RPC 请求）。
+ * 发送 RPC 请求并异步等待响应（使用 HTTP POST，消除 WebSocket 时序和断线问题）。
  */
-function connectWs(url: string): WebSocket {
-    const ws = new WebSocket(url);
+export async function sendRpc<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    const id = String(callIdCounter++);
+    const payload = JSON.stringify({ id, type: 'request', method, params });
 
-    ws.onmessage = (event) => {
-        try {
-            const msg: RpcMessage = JSON.parse(event.data);
-            // WebSocket 现在只处理 RPC 响应（不再接收事件，事件走 SSE）
-            if (msg.type === 'response' && msg.id) {
-                const cb = pendingCallbacks.get(msg.id);
-                if (cb) {
-                    cb(msg.result);
-                    pendingCallbacks.delete(msg.id);
-                }
-            }
-        } catch {
-            // 忽略
-        }
-    };
-
-    ws.onclose = () => {
-        // WebSocket 用于 RPC，断线后自动重连
-        if (!(ws as any).intentionalClose) {
-            setTimeout(() => {
-                wsInstance = connectWs(url);
-            }, 3000);
-        }
-    };
-
-    return ws;
-}
-
-/**
- * 发送 RPC 请求并异步等待响应。
- */
-export function sendRpc<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    return new Promise((resolve) => {
-        const id = String(callIdCounter++);
-        pendingCallbacks.set(id, resolve as (r: unknown) => void);
-        wsInstance?.send(JSON.stringify({ id, type: 'request', method, params }));
+    const response = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
     });
+
+    if (!response.ok) {
+        throw new Error(`RPC HTTP Error: ${response.status}`);
+    }
+
+    const data: RpcMessage = await response.json();
+    if (data.error) {
+        throw new Error(data.error);
+    }
+
+    return data.result as T;
 }
 
 /**
@@ -155,9 +123,9 @@ export function onEvent(eventName: string, handler: EventHandler): () => void {
 }
 
 /**
- * React Hook: 管理 SSE + WebSocket 连接生命周期。
+ * React Hook: 管理 SSE 连接生命周期。
  * - SSE (`EventSource`): 接收服务端事件流（单向，不会因 HMR 产生幽灵连接）
- * - WebSocket: 仅用于发送 RPC 请求
+ * - HTTP fetch: 仅用于发送 RPC 请求
  */
 export function useWebSocket() {
     const [connected, setConnected] = useState(false);
@@ -167,25 +135,15 @@ export function useWebSocket() {
         if (initialized.current) return;
         initialized.current = true;
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
         const sseUrl = `${window.location.origin}/events`;
 
         // SSE: 接收所有服务端事件
         sseSource = connectSSE(sseUrl, setConnected);
 
-        // WebSocket: 仅用于发送 RPC 请求
-        wsInstance = connectWs(wsUrl);
-
         return () => {
             if (sseSource) {
                 sseSource.close();
                 sseSource = null;
-            }
-            if (wsInstance) {
-                (wsInstance as any).intentionalClose = true;
-                wsInstance.close();
-                wsInstance = null;
             }
             initialized.current = false;
         };
