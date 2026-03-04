@@ -14,7 +14,7 @@ interface MentionItem {
 }
 
 interface Props {
-    onSend: (text: string) => void;
+    onSend: (text: string, mode: string, attachments?: { name: string, type: string, data: string }[]) => void;
     disabled?: boolean;
     connected: boolean;
     bbOpen?: boolean;
@@ -23,6 +23,8 @@ interface Props {
 
 export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: Props) {
     const [text, setText] = useState('')
+    const [attachments, setAttachments] = useState<{ name: string, type: string, data: string }[]>([])
+    const fileInputRef = useRef<HTMLInputElement>(null)
     const [mode, setMode] = useState<'standard' | 'smart' | 'auto'>('smart')
     const [models, setModels] = useState<Record<string, { protocol: string, models: string[] }>>({})
     const [activeModel, setActiveModel] = useState<string>('')
@@ -80,24 +82,53 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
     }
 
     const handleSend = useCallback(() => {
-        if (!text.trim() || disabled) return
+        if ((!text.trim() && attachments.length === 0) || disabled) return
 
-        let finalPrompt = text.trim()
-        if (mode === 'smart') {
-            finalPrompt += '\n\n[System: Explore actively, but ask for permission before editing code. Use tool calls proactively to understand but pause before taking irreversible actions.]'
-        } else if (mode === 'auto') {
-            finalPrompt += '\n\n[System: Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.]'
-        }
-
-        onSend(finalPrompt)
+        onSend(text.trim(), mode, attachments)
         setText('')
+        setAttachments([])
         setOmnibarVisible(false)
         setMentionVisible(false)
         setSelectedIndex(0)
         setMentionSelectedIndex(0)
         // 重置高度
         if (textareaRef.current) textareaRef.current.style.height = '44px'
-    }, [text, disabled, onSend, mode])
+    }, [text, disabled, onSend, mode, attachments])
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || [])
+        if (files.length === 0) return
+
+        const newAttachments: { name: string, type: string, data: string }[] = []
+        for (const file of files) {
+            const buffer = await file.arrayBuffer()
+            let dataStr = ''
+
+            if (file.type.startsWith('image/')) {
+                dataStr = await new Promise((resolve) => {
+                    const reader = new FileReader()
+                    reader.onload = (e) => resolve(e.target?.result as string)
+                    reader.readAsDataURL(file)
+                })
+            } else {
+                dataStr = new TextDecoder().decode(buffer)
+            }
+
+            newAttachments.push({
+                name: file.name,
+                type: file.type || 'application/octet-stream',
+                data: dataStr
+            })
+        }
+        setAttachments(prev => [...prev, ...newAttachments])
+        if (fileInputRef.current) {
+            fileInputRef.current.value = ''
+        }
+    }
+
+    const removeAttachment = (index: number) => {
+        setAttachments(prev => prev.filter((_, i) => i !== index))
+    }
 
     const filteredCommands = commands.filter(c => c.name.toLowerCase().includes(omnibarFilter))
 
@@ -263,11 +294,37 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
 
     return (
         <div className="input-area">
+            {attachments.length > 0 && (
+                <div className="attachments-preview" style={{ padding: '8px 12px', display: 'flex', gap: '8px', flexWrap: 'wrap', borderBottom: '1px solid #1a1a1a', background: '#0a0a0a' }}>
+                    {attachments.map((att, idx) => (
+                        <div key={idx} className="attachment-chip" style={{
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            padding: '4px 8px', backgroundColor: '#1a1a1a',
+                            borderRadius: '4px', fontSize: '12px', position: 'relative'
+                        }}>
+                            {att.type.startsWith('image/') ? (
+                                <img src={att.data} alt={att.name} style={{ width: '20px', height: '20px', objectFit: 'cover', borderRadius: '2px' }} />
+                            ) : (
+                                <span style={{ fontSize: '14px' }}>📄</span>
+                            )}
+                            <span style={{ maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
+                            <button onClick={() => removeAttachment(idx)} style={{ marginLeft: '4px', cursor: 'pointer', background: 'none', border: 'none', color: '#999', fontSize: '14px' }}>&times;</button>
+                        </div>
+                    ))}
+                </div>
+            )}
             {/* Toolbar */}
             <div className="input-toolbar">
-                <button title="Attach file">
+                <button title="Attach file" onClick={() => fileInputRef.current?.click()}>
                     <Paperclip size={14} /> Attach
                 </button>
+                <input
+                    type="file"
+                    multiple
+                    ref={fileInputRef}
+                    style={{ display: 'none' }}
+                    onChange={handleFileChange}
+                />
 
                 <ModelSelector
                     providers={models}

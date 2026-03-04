@@ -100,10 +100,11 @@ export class ToolRegistry {
         if (catalogTool && !isActive) {
             return {
                 output: `Tool "${name}" exists but is not activated. Call manageTools with action="activate" first.`,
+                isError: true,
             };
         }
 
-        return { output: `Error: Unknown tool "${name}".` };
+        return { output: `Error: Unknown tool "${name}".`, isError: true };
     }
 
     public has(name: string): boolean {

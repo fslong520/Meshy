@@ -628,7 +628,7 @@ export class TaskEngine {
      * Main execution loop.
      * Phase 2 增强：先走 InputParser 控制语法 → IntentRouter 分类 → LazyInjector 动态组装。
      */
-    public async runTask(userPrompt: string): Promise<void> {
+    public async runTask(userPrompt: string, context?: { mode?: string, attachments?: { name: string, type: string, data: string }[] }): Promise<void> {
         if (this.isRunning) {
             console.log(`[Engine] Mission already in progress. Ignoring new input: ${userPrompt}`);
             this.daemon?.broadcast('agent:text', { text: '\n[System]: A task is currently running. Please wait or stop it first.\n', id: `sys-${Date.now()}` });
@@ -639,13 +639,13 @@ export class TaskEngine {
         this.abortController = new AbortController();
 
         try {
-            await this._runTaskInternal(userPrompt);
+            await this._runTaskInternal(userPrompt, context);
         } finally {
             this.isRunning = false;
         }
     }
 
-    private async _runTaskInternal(userPrompt: string): Promise<void> {
+    private async _runTaskInternal(userPrompt: string, context?: { mode?: string, attachments?: { name: string, type: string, data: string }[] }): Promise<void> {
         // Phase 4: 初始化记忆库
         await this.workspace.memoryStore.initialize();
 
@@ -683,12 +683,31 @@ export class TaskEngine {
                     }
 
                     // 将渲染后的 prompt 作为用户消息注入
-                    this.addMessageAndAppend({ role: 'user', content: renderedPrompt });
+                    this.addMessageAndAppend({ role: 'user', content: renderedPrompt, attachments: context?.attachments });
 
                     // 使用命令绑定的模型或默认模型
                     const decision = await this.router.classify(renderedPrompt);
                     const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
                         .withRoutingHint(decision.systemPromptHint);
+
+                    const mode = (context?.mode || this.sandbox.getMode()) as string;
+                    if (mode === 'smart') {
+                        builder.withConstraint('Explore actively, but ask for permission before editing code. Use tool calls proactively to understand but pause before taking irreversible actions.');
+                    } else if (mode === 'auto') {
+                        builder.withConstraint('Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.');
+                    }
+
+                    if (context?.attachments && context.attachments.length > 0) {
+                        let attachmentsContext = '[User Attachments Context]\n';
+                        for (const att of context.attachments) {
+                            if (!att.type.startsWith('image/')) {
+                                attachmentsContext += `--- ${att.name} ---\n${att.data}\n`;
+                            } else {
+                                attachmentsContext += `--- ${att.name} ---\n[Image provided in UI, backend multimodal not fully implemented yet]\n`;
+                            }
+                        }
+                        builder.withConstraint(attachmentsContext);
+                    }
 
                     const basePrompt = builder.build();
                     const injectionParsed = InputParser.parse(renderedPrompt);
@@ -714,7 +733,7 @@ export class TaskEngine {
             }
         }
 
-        this.addMessageAndAppend({ role: 'user', content: userPrompt });
+        this.addMessageAndAppend({ role: 'user', content: userPrompt, attachments: context?.attachments });
 
         // ── Phase 2: 意图路由（使用清洗后的文本） ──
         const decision = await this.router.classify(parsed.cleanText);
@@ -746,6 +765,25 @@ export class TaskEngine {
         if (memoryHint) builder.withMemoryHint(memoryHint);
         if (catalogAdvert || mcpAdvert) {
             builder.withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
+        }
+
+        const mode = (context?.mode || this.sandbox.getMode()) as string;
+        if (mode === 'smart') {
+            builder.withConstraint('Explore actively, but ask for permission before editing code. Use tool calls proactively to understand but pause before taking irreversible actions.');
+        } else if (mode === 'auto') {
+            builder.withConstraint('Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.');
+        }
+
+        if (context?.attachments && context.attachments.length > 0) {
+            let attachmentsContext = '[User Attachments Context]\n';
+            for (const att of context.attachments) {
+                if (!att.type.startsWith('image/')) {
+                    attachmentsContext += `--- ${att.name} ---\n${att.data}\n`;
+                } else {
+                    attachmentsContext += `--- ${att.name} ---\n[Image provided in UI, backend multimodal not fully implemented yet]\n`;
+                }
+            }
+            builder.withConstraint(attachmentsContext);
         }
 
         // Phase 16: Ritual 上下文注入
@@ -1015,10 +1053,9 @@ export class TaskEngine {
                     // 2. Execute ALL tools concurrently
                     const executionPromises = pendingToolCalls.map(async (call) => {
                         const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
-                        this.daemon?.broadcast('agent:tool_call', { id: call.id, name: call.name, args: call.rawArgs });
-                        const result = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
-                        this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: typeof result === 'string' ? result : JSON.stringify(result) });
-                        return { id: call.id, result };
+                        const resultObj = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
+                        this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: resultObj.output, isError: resultObj.isError });
+                        return { id: call.id, result: resultObj.output };
                     });
 
                     const results = await Promise.all(executionPromises);
@@ -1252,12 +1289,12 @@ export class TaskEngine {
         }));
     }
 
-    private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<string> {
+    private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<{ output: string, isError?: boolean }> {
         // ── Phase 2: Agent Tool Whitelist Block ──
         if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(name)) {
             const reason = `[BLOCKED] Agent is not allowed to use tool "${name}". Please do not use this tool anymore.`;
             this.daemon?.broadcast('agent:error', { id, tool: name, reason });
-            return reason;
+            return { output: reason, isError: true };
         }
 
         // ── Phase 3: 沙盒审批网关 ──
@@ -1281,7 +1318,8 @@ export class TaskEngine {
 
         try {
             if (name.startsWith('mcp:')) {
-                return await this.workspace.mcpHost.callTool(name, args);
+                const output = await this.workspace.mcpHost.callTool(name, args);
+                return { output };
             }
 
             const result = await this.toolRegistry.execute(name, args, {
@@ -1289,11 +1327,11 @@ export class TaskEngine {
                 workspaceRoot: process.cwd(),
                 session: this.session, // 注入 Session 供按需工具 (useTool) 修改挂载状态
             });
-            return result.output;
+            return { output: result.output, isError: result.isError };
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
             this.daemon?.broadcast('agent:error', { id, tool: name, error: message });
-            return `Error executing "${name}": ${message}`;
+            return { output: `Error executing "${name}": ${message}`, isError: true };
         }
     }
 }

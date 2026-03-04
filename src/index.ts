@@ -241,7 +241,17 @@ export async function runServer(port: number) {
     engine.getSkillRegistry().scan(activeWorkspace.rootPath);
 
     // 监听 Web UI 发来的独立任务
-    daemon.on('task:submit', async (submittedPrompt: string, id?: string) => {
+    daemon.on('task:submit', async (payload: any, id?: string) => {
+        let submittedPrompt = '';
+        let contextOpts: any = {};
+
+        if (typeof payload === 'string') {
+            submittedPrompt = payload;
+        } else {
+            submittedPrompt = payload.prompt || '';
+            contextOpts = { mode: payload.mode, attachments: payload.attachments };
+        }
+
         console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
         try {
             const isNew = session.history.length === 0;
@@ -250,7 +260,7 @@ export async function runServer(port: number) {
                 session.title = submittedPrompt.slice(0, 30) + (submittedPrompt.length > 30 ? '...' : '');
             }
 
-            await engine.runTask(submittedPrompt);
+            await engine.runTask(submittedPrompt, contextOpts);
 
             // Always broadcast session list after a task finishes (so new sessions and new titles appear)
             daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });

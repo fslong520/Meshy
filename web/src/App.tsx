@@ -178,13 +178,13 @@ function App() {
 
   // Tool Call 结果
   useEvent('agent:tool_result', (msg: RpcMessage) => {
-    const data = msg.data as { id: string; name: string; result: string }
+    const data = msg.data as { id: string; name: string; result: string; isError?: boolean }
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === 'agent' && last.toolCalls) {
         const toolCalls = last.toolCalls.map((tc) =>
           tc.id === data.id && tc.status === 'running'
-            ? { ...tc, result: data.result, status: 'done' as const }
+            ? { ...tc, result: data.result, status: (data.isError ? 'error' : 'done') as 'error' | 'done' }
             : tc,
         )
         return [...prev.slice(0, -1), { ...last, toolCalls }]
@@ -248,19 +248,20 @@ function App() {
 
   // 发送消息
   const handleSend = useCallback(
-    (text: string) => {
-      if (!text.trim()) return
+    (text: string, mode: string, attachments?: { name: string; type: string; data: string }[]) => {
+      if (!text.trim() && (!attachments || attachments.length === 0)) return
 
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         role: 'user',
         content: text,
         timestamp: Date.now(),
+        attachments,
       }
       setMessages((prev) => [...prev, userMsg])
 
       // 通过 RPC 提交任务
-      sendRpc('task:submit', { prompt: text })
+      sendRpc('task:submit', { prompt: text, mode, attachments })
     },
     [],
   )

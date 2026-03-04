@@ -18,6 +18,19 @@ export const RunCommandTool = defineTool('run_command', {
         try {
             const id = terminalManager.startProcess(params.command, cwd);
 
+            // Wait briefly to catch immediate execution failures (e.g., non-existent command, syntax error)
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            const status = terminalManager.getProcessStatus(id);
+            if (status && status.status === 'exited' && status.exitCode !== 0) {
+                const logs = terminalManager.getProcessOutput(id, 2000);
+                return {
+                    output: `Process exited immediately with code ${status.exitCode}.\\n\\nOutput Logs:\\n${logs}`,
+                    isError: true,
+                    metadata: { id, exitCode: status.exitCode }
+                };
+            }
+
             // 将进程状态持久化到 Session 中
             if (ctx.session) {
                 if (!ctx.session.backgroundProcesses) {
@@ -37,7 +50,8 @@ export const RunCommandTool = defineTool('run_command', {
             };
         } catch (error: any) {
             return {
-                output: `Failed to start background process: ${error.message}`
+                output: `Failed to start background process: ${error.message}`,
+                isError: true
             };
         }
     }

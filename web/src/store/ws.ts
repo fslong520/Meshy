@@ -21,6 +21,7 @@ export interface ChatMessage {
     reasoningContent?: string;
     toolCalls?: ToolCallInfo[];
     approval?: ApprovalInfo;
+    attachments?: { name: string; type: string; data: string }[];
 }
 
 export interface ToolCallInfo {

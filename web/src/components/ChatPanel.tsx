@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { Search, ChevronUp, ChevronDown, MoreVertical, Edit2, Trash2, Minimize2 } from 'lucide-react'
-import type { ChatMessage } from '../store/ws'
+import { useWebSocket, useEvent, type ChatMessage } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -16,11 +16,29 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
     const [searchTerm, setSearchTerm] = useState('')
     const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
 
-    // Session Actions State
+    // Workspace & Session State
+    const { sendRpc } = useWebSocket()
+    const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null)
     const [menuOpen, setMenuOpen] = useState(false)
     const [isRenaming, setIsRenaming] = useState(false)
     const [renameTitle, setRenameTitle] = useState('')
     const menuRef = useRef<HTMLDivElement>(null)
+
+    // Fetch initial workspace
+    useEffect(() => {
+        sendRpc<{ activeWorkspace?: string }>('workspace:list').then(res => {
+            if (res && res.activeWorkspace) {
+                setActiveWorkspace(res.activeWorkspace)
+            }
+        })
+    }, [sendRpc])
+
+    // Listen for workspace switches
+    useEvent('workspace:list', (msg: any) => {
+        if (msg.data && msg.data.activeWorkspace) {
+            setActiveWorkspace(msg.data.activeWorkspace)
+        }
+    })
 
     // Handle outside click for menu
     useEffect(() => {
@@ -230,6 +248,27 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                 </ReactMarkdown>
                             )}
 
+                            {/* Attachments preview */}
+                            {msg.attachments && msg.attachments.length > 0 && (
+                                <div className="message-attachments" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                                    {msg.attachments.map((att, idx) => (
+                                        <div key={idx} style={{
+                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                            padding: '4px 8px', backgroundColor: 'var(--bg-tertiary)',
+                                            borderRadius: '4px', fontSize: '12px', border: '1px solid var(--border)'
+                                        }}>
+                                            {att.type.startsWith('image/') ? (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img src={att.data} alt={att.name} style={{ width: '20px', height: '20px', objectFit: 'cover', borderRadius: '2px' }} />
+                                            ) : (
+                                                <span style={{ fontSize: '14px' }}>📄</span>
+                                            )}
+                                            <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{att.name}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
                             {/* Tool Call卡片 - Inline/Block 风格 */}
                             {msg.toolCalls?.map((tc, j) => {
                                 const key = `${msg.id}-tool-${j}`
@@ -243,6 +282,42 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                     </div>
                                 )
 
+                                // 解析参数以提取内联显示内容
+                                let toolTarget = '';
+                                try {
+                                    if (tc.args) {
+                                        const parsedArgs = JSON.parse(tc.args);
+                                        const toolLower = tc.name.toLowerCase();
+
+                                        // 处理文件路径展示
+                                        const extractPath = (p: string) => {
+                                            if (!p) return '';
+                                            const ws = activeWorkspace || '';
+                                            // 统一路径分隔符进行比较
+                                            const normP = p.replace(/\\/g, '/');
+                                            const normWs = ws.replace(/\\/g, '/');
+
+                                            if (normP.startsWith(normWs)) {
+                                                const rel = normP.slice(normWs.length);
+                                                return rel.startsWith('/') ? rel.slice(1) : rel;
+                                            }
+                                            return p;
+                                        }
+
+                                        if (toolLower.includes('read') || toolLower.includes('write') || toolLower.includes('edit')) {
+                                            toolTarget = extractPath(parsedArgs.filePath || parsedArgs.path || '');
+                                        } else if (toolLower.includes('command') || toolLower.includes('bash')) {
+                                            toolTarget = parsedArgs.commandLine || parsedArgs.command || '';
+                                        } else if (toolLower.includes('search') || toolLower.includes('grep')) {
+                                            toolTarget = `"${parsedArgs.query || parsedArgs.pattern || ''}"`;
+                                        }
+                                    }
+                                } catch (e) {
+                                    // 忽略解析错误，保持默认
+                                }
+
+                                const displayTarget = toolTarget ? ` ` + toolTarget : '';
+
                                 // Inline 模式 (Running)
                                 if (isRunning) {
                                     return (
@@ -250,7 +325,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                             {approvalNotice}
                                             <span className="icon">⚙</span>
                                             <span className="tool-name">[Running] {tc.name}</span>
-                                            <span className="tool-args">{tc.args.length > 50 ? tc.args.slice(0, 50) + '...' : tc.args}</span>
+                                            {toolTarget && <span className="tool-target" style={{ marginLeft: 6, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '0.9em' }}>{displayTarget}</span>}
                                         </div>
                                     )
                                 }
@@ -262,7 +337,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                         {approvalNotice}
                                         <div className="tool-block-header">
                                             <span className="icon">{isError ? '⚠️' : '✓'}</span>
-                                            <span className="tool-title"># {tc.name} {isError ? '(Failed)' : '(Success)'}</span>
+                                            <span className="tool-title"># {tc.name}{toolTarget && <span style={{ color: 'var(--text-secondary)', marginLeft: 8, fontWeight: 400, fontFamily: 'var(--font-mono)', fontSize: '0.95em' }}>{displayTarget}</span>} {isError ? '(Failed)' : '(Success)'}</span>
                                             <span className="tool-expander">{expanded ? '▼' : '▶'}</span>
                                         </div>
                                         {expanded && (

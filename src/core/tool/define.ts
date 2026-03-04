@@ -22,6 +22,7 @@ export interface ToolContext {
 // ─── 工具执行结果 ───
 export interface ToolResult {
     output: string;
+    isError?: boolean;
     metadata?: Record<string, unknown>;
 }
 
@@ -60,6 +61,7 @@ export function defineTool<P extends z.ZodType>(
                     .join('\n');
                 return {
                     output: `Tool "${id}" received invalid arguments:\n${issues}\nPlease fix and retry.`,
+                    isError: true,
                 };
             }
 

@@ -45,7 +45,7 @@ export const BashTool = defineTool('bash', {
 
         const shell = getDefaultShell();
 
-        return new Promise<{ output: string; metadata?: Record<string, unknown> }>((resolve) => {
+        return new Promise<{ output: string; isError?: boolean; metadata?: Record<string, unknown> }>((resolve) => {
             let output = '';
             let timedOut = false;
 
@@ -87,6 +87,7 @@ export const BashTool = defineTool('bash', {
 
                 resolve({
                     output: parts.join('\n'),
+                    isError: code !== 0,
                     metadata: {
                         exit: code,
                         timedOut,
@@ -99,6 +100,7 @@ export const BashTool = defineTool('bash', {
                 clearTimeout(timer);
                 resolve({
                     output: `Failed to execute command: ${err.message}`,
+                    isError: true,
                     metadata: { exit: -1 },
                 });
             });
