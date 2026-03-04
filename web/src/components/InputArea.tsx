@@ -16,12 +16,11 @@ interface MentionItem {
 interface Props {
     onSend: (text: string, mode: string, attachments?: { name: string, type: string, data: string }[]) => void;
     disabled?: boolean;
-    connected: boolean;
     bbOpen?: boolean;
     onToggleBb?: () => void;
 }
 
-export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: Props) {
+export function InputArea({ onSend, disabled, bbOpen, onToggleBb }: Props) {
     const [text, setText] = useState('')
     const [attachments, setAttachments] = useState<{ name: string, type: string, data: string }[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -46,7 +45,6 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     useEffect(() => {
-        if (!connected) return
         sendRpc<{ providers: Record<string, { protocol: string, models: string[] }>, defaultModel: string }>('model:list').then((res) => {
             if (res) {
                 setModels(res.providers)
@@ -69,7 +67,7 @@ export function InputArea({ onSend, disabled, connected, bbOpen, onToggleBb }: P
                 setMentionItems(res.items)
             }
         })
-    }, [connected])
+    }, [])
 
     const handleModelChange = (newModel: string) => {
         setActiveModel(newModel)

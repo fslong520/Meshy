@@ -89,9 +89,23 @@ export const WebSearchTool = defineTool('websearch', {
     ].join('\n'),
     parameters: z.object({
         query: z.string().describe('The search query'),
-        maxResults: z.number()
-            .describe('Maximum number of results to return (default 5)')
-            .optional(),
+        /**
+         * 兼容 LLM 传入字符串数字的情况（例如 "5"），防止 zod 校验失败。
+         */
+        maxResults: z.preprocess(
+            (value) => {
+                if (typeof value === 'string') {
+                    const n = Number.parseInt(value, 10);
+                    return Number.isNaN(n) ? value : n;
+                }
+                return value;
+            },
+            z.number()
+                .int()
+                .positive()
+                .max(50)
+                .describe('Maximum number of results to return (default 5)')
+        ).optional(),
     }),
     async execute(params) {
         const maxResults = params.maxResults ?? DEFAULT_MAX_RESULTS;

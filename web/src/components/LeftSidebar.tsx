@@ -24,14 +24,12 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Pro
     const [activeWorkspace, setActiveWorkspace] = useState<string>('')
 
     const refreshSessions = useCallback(() => {
-        if (!connected) return
         sendRpc<{ sessions: SessionInfo[] }>('session:list').then((res) => {
             if (res?.sessions) setSessions(res.sessions)
         })
-    }, [connected])
+    }, [])
 
     const refreshWorkspaces = useCallback(() => {
-        if (!connected) return
         sendRpc<{ workspaces: string[]; activeWorkspace?: string }>('workspace:list').then((res) => {
             if (res && res.workspaces) {
                 setWorkspaces(res.workspaces)
@@ -42,7 +40,7 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Pro
                 }
             }
         })
-    }, [connected, activeWorkspace])
+    }, [activeWorkspace])
 
     useEffect(() => {
         refreshSessions()

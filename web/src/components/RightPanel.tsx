@@ -13,7 +13,7 @@ const TABS: { key: TabName; label: string }[] = [
     { key: 'messaging', label: 'Msg' },
 ]
 
-export function RightPanel({ connected }: { connected: boolean }) {
+export function RightPanel() {
     const [activeTab, setActiveTab] = useState<TabName>('skills')
 
     return (
@@ -33,9 +33,9 @@ export function RightPanel({ connected }: { connected: boolean }) {
 
             {/* Tab Content */}
             <div className="right-tab-content">
-                {activeTab === 'skills' && <SkillsTab connected={connected} />}
-                {activeTab === 'mcp' && <McpTab connected={connected} />}
-                {activeTab === 'soul' && <SoulTab connected={connected} />}
+                {activeTab === 'skills' && <SkillsTab />}
+                {activeTab === 'mcp' && <McpTab />}
+                {activeTab === 'soul' && <SoulTab />}
                 {activeTab === 'plugins' && <PlaceholderTab title="Plugins" />}
                 {activeTab === 'messaging' && <PlaceholderTab title="Messaging" />}
             </div>
@@ -55,7 +55,7 @@ interface SkillItem {
 
 type ScopeFilter = 'all' | 'global' | 'project'
 
-function SkillsTab({ connected }: { connected: boolean }) {
+function SkillsTab() {
     const [skills, setSkills] = useState<SkillItem[]>([])
     const [searchQuery, setSearchQuery] = useState('')
     const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
@@ -74,9 +74,8 @@ function SkillsTab({ connected }: { connected: boolean }) {
     const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
     useEffect(() => {
-        if (!connected) return
         sendRpc<{ skills: SkillItem[] }>('skill:list').then(res => setSkills(res?.skills || []))
-    }, [connected])
+    }, [])
 
     // Debounced search
     const handleSearch = (q: string) => {
@@ -526,7 +525,7 @@ interface McpServer {
 
 type McpFormMode = 'create' | 'edit'
 
-function McpTab({ connected }: { connected: boolean }) {
+function McpTab() {
     const [servers, setServers] = useState<McpServer[]>([])
     const [formMode, setFormMode] = useState<McpFormMode | null>(null)
     const [editTarget, setEditTarget] = useState<string | null>(null)
@@ -542,9 +541,8 @@ function McpTab({ connected }: { connected: boolean }) {
     const [fEnv, setFEnv] = useState('')
 
     useEffect(() => {
-        if (!connected) return
         sendRpc<{ servers: McpServer[] }>('mcp:list').then(res => setServers(res?.servers || []))
-    }, [connected])
+    }, [])
 
     const resetForm = () => {
         setFName(''); setFType('local'); setFCommand(''); setFArgs('')
@@ -776,13 +774,12 @@ const primaryBtnStyle: React.CSSProperties = {
 }
 
 // ─── SOUL Tab ───
-function SoulTab({ connected }: { connected: boolean }) {
+function SoulTab() {
     const [rituals, setRituals] = useState<{ name: string, status: string, desc: string }[]>([])
 
     useEffect(() => {
-        if (!connected) return
         sendRpc<{ rituals: typeof rituals }>('ritual:status').then(res => setRituals(res?.rituals || []))
-    }, [connected])
+    }, [])
 
     const getStatusStyle = (status: string) => {
         if (status === 'Loaded') return { background: 'var(--accent-dim)', color: 'var(--accent)' }

@@ -106,6 +106,27 @@ function App() {
   const [agentStreaming, setAgentStreaming] = useState(false)
   const [activeSession, setActiveSession] = useState<{ id: string; title?: string } | null>(null)
 
+  // 确保存在当前轮次的 Agent 消息容器，用于挂载 toolCalls / 错误等状态
+  const ensureAgentContainer = useCallback((prev: ChatMessage[]): { list: ChatMessage[]; agent: ChatMessage } => {
+    const list = [...prev]
+    let last = list[list.length - 1]
+    if (!last || last.role !== 'agent') {
+      const agentMsg: ChatMessage = {
+        id: `agent-${Date.now()}`,
+        role: 'agent',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [],
+      }
+      list.push(agentMsg)
+      last = agentMsg
+    } else if (!last.toolCalls) {
+      last = { ...last, toolCalls: [] }
+      list[list.length - 1] = last
+    }
+    return { list, agent: last }
+  }, [])
+
   // 接收 Agent 流式文本
   useEvent('agent:text', (msg: RpcMessage) => {
     const chunk = msg.data as { text: string; id: string; replace?: boolean }
@@ -157,24 +178,22 @@ function App() {
   useEvent('agent:tool_call', (msg: RpcMessage) => {
     const data = msg.data as { name: string; args: string; id: string }
     setMessages((prev) => {
-      const last = prev[prev.length - 1]
-      if (last?.role === 'agent') {
-        const existingToolCalls = last.toolCalls || []
-        const existingIndex = existingToolCalls.findIndex(tc => tc.id === data.id)
+      const { list, agent } = ensureAgentContainer(prev)
+      const existingToolCalls = agent.toolCalls || []
+      const existingIndex = existingToolCalls.findIndex(tc => tc.id === data.id)
 
-        let newToolCalls;
-        if (existingIndex >= 0) {
-          // Update existing tool call args
-          newToolCalls = [...existingToolCalls];
-          newToolCalls[existingIndex] = { ...newToolCalls[existingIndex], args: data.args || '' }
-        } else {
-          // Add new tool call
-          newToolCalls = [...existingToolCalls, { id: data.id, name: data.name, args: data.args || '', status: 'running' as const }]
-        }
-
-        return [...prev.slice(0, -1), { ...last, toolCalls: newToolCalls }]
+      let newToolCalls
+      if (existingIndex >= 0) {
+        // 更新已有的 tool 调用参数（流式累积）
+        newToolCalls = [...existingToolCalls]
+        newToolCalls[existingIndex] = { ...newToolCalls[existingIndex], args: data.args || '' }
+      } else {
+        // 新增一个运行中的 tool 调用
+        newToolCalls = [...existingToolCalls, { id: data.id, name: data.name, args: data.args || '', status: 'running' as const }]
       }
-      return prev
+
+      list[list.length - 1] = { ...agent, toolCalls: newToolCalls }
+      return list
     })
   })
 
@@ -182,16 +201,38 @@ function App() {
   useEvent('agent:tool_result', (msg: RpcMessage) => {
     const data = msg.data as { id: string; name: string; result: string; isError?: boolean }
     setMessages((prev) => {
-      const last = prev[prev.length - 1]
-      if (last?.role === 'agent' && last.toolCalls) {
-        const toolCalls = last.toolCalls.map((tc) =>
-          tc.id === data.id && tc.status === 'running'
-            ? { ...tc, result: data.result, status: (data.isError ? 'error' : 'done') as 'error' | 'done' }
-            : tc,
-        )
-        return [...prev.slice(0, -1), { ...last, toolCalls }]
-      }
-      return prev
+      const { list, agent } = ensureAgentContainer(prev)
+      const existingToolCalls = agent.toolCalls || []
+
+      let found = false
+      const toolCalls = existingToolCalls.map((tc) => {
+        if (tc.id === data.id) {
+          found = true
+          return {
+            ...tc,
+            result: data.result,
+            status: (data.isError ? 'error' : 'done') as 'error' | 'done',
+          }
+        }
+        return tc
+      })
+
+      // 如果结果先于 tool_call_start 抵达，则补一条新的卡片
+      const finalToolCalls = found
+        ? toolCalls
+        : [
+            ...toolCalls,
+            {
+              id: data.id,
+              name: data.name,
+              args: '',
+              result: data.result,
+              status: (data.isError ? 'error' : 'done') as 'error' | 'done',
+            } as const,
+          ]
+
+      list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
+      return list
     })
   })
 
@@ -200,19 +241,34 @@ function App() {
     const data = msg.data as { id?: string; tool?: string; error?: string; reason?: string }
     const errorText = data.reason || data.error || 'Unknown error'
     setMessages((prev) => {
-      const last = prev[prev.length - 1]
-      if (last?.role === 'agent') {
-        const toolCalls = (last.toolCalls || []).map((tc) =>
-          (data.id ? tc.id === data.id : tc.name === data.tool) && tc.status === 'running'
-            ? { ...tc, result: `⚠️ ${errorText}`, status: 'error' as const }
-            : tc,
-        )
-        return [...prev.slice(0, -1), { ...last, toolCalls }]
-      }
-      return [
-        ...prev,
-        { id: `error-${Date.now()}`, role: 'agent', content: `⚠️ Error: ${errorText}`, timestamp: Date.now() },
-      ]
+      const { list, agent } = ensureAgentContainer(prev)
+      const existingToolCalls = agent.toolCalls || []
+
+      let matched = false
+      const toolCalls = existingToolCalls.map((tc) => {
+        const hit = (data.id ? tc.id === data.id : data.tool ? tc.name === data.tool : false) && tc.status === 'running'
+        if (hit) {
+          matched = true
+          return { ...tc, result: `⚠️ ${errorText}`, status: 'error' as const }
+        }
+        return tc
+      })
+
+      const finalToolCalls = matched
+        ? toolCalls
+        : [
+            ...toolCalls,
+            {
+              id: data.id || `error-${Date.now()}`,
+              name: data.tool || 'UnknownTool',
+              args: '',
+              result: `⚠️ ${errorText}`,
+              status: 'error' as const,
+            },
+          ]
+
+      list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
+      return list
     })
   })
 
@@ -344,12 +400,11 @@ function App() {
         <InputArea
           onSend={handleSend}
           disabled={agentStreaming}
-          connected={connected}
           bbOpen={bbOpen}
           onToggleBb={() => setBbOpen(!bbOpen)}
         />
       </div>
-      <RightPanel connected={connected} />
+      <RightPanel />
 
       {/* Blackboard Drawer (no more floating toggle – it's in InputArea toolbar) */}
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
