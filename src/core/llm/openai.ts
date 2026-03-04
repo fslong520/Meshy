@@ -43,6 +43,50 @@ export class OpenAIAdapter implements ILLMProvider {
                     }
                     messages.push(param);
                 }
+            } else if (Array.isArray(msg.content)) {
+                const openaiContent: OpenAI.Chat.ChatCompletionContentPart[] = msg.content.map(part => {
+                    if (part.type === 'text') {
+                        return { type: 'text', text: part.text || '' };
+                    } else if (part.type === 'image') {
+                        let url = part.data || '';
+                        if (!url.startsWith('data:')) {
+                            url = `data:${part.mimeType || 'image/jpeg'};base64,${url}`;
+                        }
+                        return { type: 'image_url', image_url: { url } };
+                    } else {
+                        // For unsupported file types or plain text files, fallback to text representation
+                        let decodedText = part.data || '';
+                        if (part.data && !part.data.startsWith('data:')) {
+                            try {
+                                decodedText = Buffer.from(part.data, 'base64').toString('utf-8');
+                            } catch (e) {
+                                decodedText = '[Binary file omitted]';
+                            }
+                        } else if (part.data && part.data.startsWith('data:')) {
+                            const commaIdx = part.data.indexOf(',');
+                            if (commaIdx !== -1) {
+                                try {
+                                    decodedText = Buffer.from(part.data.substring(commaIdx + 1), 'base64').toString('utf-8');
+                                } catch (e) {
+                                    decodedText = '[Binary file omitted]';
+                                }
+                            }
+                        }
+                        return { type: 'text', text: `[Attached File: ${part.mimeType || 'unknown'}]\n${decodedText}` };
+                    }
+                });
+
+                if (msg.role === 'user') {
+                    messages.push({
+                        role: 'user',
+                        content: openaiContent
+                    });
+                } else {
+                    messages.push({
+                        role: 'assistant',
+                        content: openaiContent.map(p => p.type === 'text' ? p.text : '').join('\n')
+                    });
+                }
             } else if (msg.content.type === 'tool_call') {
                 messages.push({
                     role: 'assistant',

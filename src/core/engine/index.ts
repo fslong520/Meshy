@@ -683,7 +683,18 @@ export class TaskEngine {
                     }
 
                     // 将渲染后的 prompt 作为用户消息注入
-                    this.addMessageAndAppend({ role: 'user', content: renderedPrompt, attachments: context?.attachments });
+                    let finalContent: any = renderedPrompt;
+                    if (context?.attachments && context.attachments.length > 0) {
+                        finalContent = [{ type: 'text', text: renderedPrompt }];
+                        for (const att of context.attachments) {
+                            if (att.type.startsWith('image/')) {
+                                finalContent.push({ type: 'image', mimeType: att.type, data: att.data });
+                            } else {
+                                finalContent.push({ type: 'file', mimeType: att.type, data: att.data });
+                            }
+                        }
+                    }
+                    this.addMessageAndAppend({ role: 'user', content: finalContent });
 
                     // 使用命令绑定的模型或默认模型
                     const decision = await this.router.classify(renderedPrompt);
@@ -697,18 +708,7 @@ export class TaskEngine {
                         builder.withConstraint('Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.');
                     }
 
-                    if (context?.attachments && context.attachments.length > 0) {
-                        let attachmentsContext = '[User Attachments Context]\n';
-                        for (const att of context.attachments) {
-                            if (!att.type.startsWith('image/')) {
-                                attachmentsContext += `--- ${att.name} ---\n${att.data}\n`;
-                            } else {
-                                attachmentsContext += `--- ${att.name} ---\n[Image provided in UI, backend multimodal not fully implemented yet]\n`;
-                            }
-                        }
-                        builder.withConstraint(attachmentsContext);
-                    }
-
+                    // Attachments are now natively passed in the user message content array
                     const basePrompt = builder.build();
                     const injectionParsed = InputParser.parse(renderedPrompt);
                     const injection = await this.injector.resolve(
@@ -733,7 +733,18 @@ export class TaskEngine {
             }
         }
 
-        this.addMessageAndAppend({ role: 'user', content: userPrompt, attachments: context?.attachments });
+        let finalContent: any = userPrompt;
+        if (context?.attachments && context.attachments.length > 0) {
+            finalContent = [{ type: 'text', text: userPrompt }];
+            for (const att of context.attachments) {
+                if (att.type.startsWith('image/')) {
+                    finalContent.push({ type: 'image', mimeType: att.type, data: att.data });
+                } else {
+                    finalContent.push({ type: 'file', mimeType: att.type, data: att.data });
+                }
+            }
+        }
+        this.addMessageAndAppend({ role: 'user', content: finalContent });
 
         // ── Phase 2: 意图路由（使用清洗后的文本） ──
         const decision = await this.router.classify(parsed.cleanText);
@@ -774,17 +785,7 @@ export class TaskEngine {
             builder.withConstraint('Execute fully autonomously until the objective is 100% complete. Do not ask for user permission, only report when fully done.');
         }
 
-        if (context?.attachments && context.attachments.length > 0) {
-            let attachmentsContext = '[User Attachments Context]\n';
-            for (const att of context.attachments) {
-                if (!att.type.startsWith('image/')) {
-                    attachmentsContext += `--- ${att.name} ---\n${att.data}\n`;
-                } else {
-                    attachmentsContext += `--- ${att.name} ---\n[Image provided in UI, backend multimodal not fully implemented yet]\n`;
-                }
-            }
-            builder.withConstraint(attachmentsContext);
-        }
+        // Attachments are natively passed in the user message content array
 
         // Phase 16: Ritual 上下文注入
         const isFirstTurn = this.session.history.length === 0;

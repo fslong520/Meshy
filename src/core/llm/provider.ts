@@ -4,9 +4,16 @@ export interface StandardTool {
     inputSchema: any; // Using simplified any for JSON Schema initially
 }
 
+export interface StandardContentPart {
+    type: 'text' | 'image' | 'file';
+    text?: string;
+    mimeType?: string;
+    data?: string; // base64 encoded data
+}
+
 export interface StandardMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
-    content: string | StandardToolCall | StandardToolResult;
+    content: string | StandardContentPart[] | StandardToolCall | StandardToolResult;
     reasoningContent?: string; // Optional thinking process for models like deepseek-reasoner
 }
 

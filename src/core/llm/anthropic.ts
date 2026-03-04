@@ -43,6 +43,59 @@ export class AnthropicAdapter implements ILLMProvider {
                     role: msg.role === 'assistant' ? 'assistant' : 'user',
                     content: msg.content
                 });
+            } else if (Array.isArray(msg.content)) {
+                const anthropicContent: Anthropic.ContentBlockParam[] = msg.content.map(part => {
+                    if (part.type === 'text') {
+                        return { type: 'text', text: part.text || '' };
+                    } else if (part.type === 'image') {
+                        let base64Data = part.data || '';
+                        let mediaType = part.mimeType || 'image/jpeg';
+                        if (base64Data.startsWith('data:')) {
+                            const commaIdx = base64Data.indexOf(',');
+                            if (commaIdx !== -1) {
+                                const header = base64Data.substring(0, commaIdx);
+                                const match = header.match(/^data:(image\/[a-zA-Z0-9+-.]+);base64/);
+                                if (match) {
+                                    mediaType = match[1];
+                                }
+                                base64Data = base64Data.substring(commaIdx + 1);
+                            }
+                        }
+                        return {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                                data: base64Data
+                            }
+                        };
+                    } else {
+                        // For unsupported file types or plain text files, fallback to text representation
+                        let decodedText = part.data || '';
+                        if (part.data && !part.data.startsWith('data:')) {
+                            try {
+                                decodedText = Buffer.from(part.data, 'base64').toString('utf-8');
+                            } catch (e) {
+                                decodedText = '[Binary file omitted]';
+                            }
+                        } else if (part.data && part.data.startsWith('data:')) {
+                            const commaIdx = part.data.indexOf(',');
+                            if (commaIdx !== -1) {
+                                try {
+                                    decodedText = Buffer.from(part.data.substring(commaIdx + 1), 'base64').toString('utf-8');
+                                } catch (e) {
+                                    decodedText = '[Binary file omitted]';
+                                }
+                            }
+                        }
+                        return { type: 'text', text: `[Attached File: ${part.mimeType || 'unknown'}]\n${decodedText}` };
+                    }
+                });
+
+                messages.push({
+                    role: msg.role === 'assistant' ? 'assistant' : 'user',
+                    content: anthropicContent
+                });
             } else if (msg.content.type === 'tool_call') {
                 messages.push({
                     role: 'assistant',

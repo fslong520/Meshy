@@ -60,7 +60,7 @@ export class ReflectionEngine {
                 return null;
             }
 
-            const toolCalls = session.history.filter(m => typeof m.content !== 'string' && m.content.type === 'tool_call');
+            const toolCalls = session.history.filter(m => typeof m.content !== 'string' && !Array.isArray(m.content) && m.content.type === 'tool_call');
             const errors = session.history.filter(m => typeof m.content === 'string' && m.content.includes('Error'));
 
             // 简单问答（无工具调用）跳过
@@ -159,7 +159,7 @@ export class ReflectionEngine {
 
         // 提取工具调用序列
         const toolCalls = session.history
-            .filter(m => typeof m.content !== 'string' && m.content.type === 'tool_call')
+            .filter(m => typeof m.content !== 'string' && !Array.isArray(m.content) && m.content.type === 'tool_call')
             .map(m => {
                 const tc = m.content as { name: string; arguments: Record<string, unknown> };
                 return `  - ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 80)})`;
