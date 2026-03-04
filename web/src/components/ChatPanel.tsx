@@ -3,6 +3,7 @@ import { Search, ChevronUp, ChevronDown, MoreVertical, Edit2, Trash2, Minimize2 
 import { useWebSocket, useEvent, type ChatMessage } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { CodeBlock, PreBlock } from './CodeBlock'
 
 interface Props {
     messages: ChatMessage[];
@@ -235,7 +236,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                             {msg.reasoningContent && (
                                 <details className="reasoning-block">
                                     <summary>🤔 Thinking Process</summary>
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
                                         {msg.reasoningContent}
                                     </ReactMarkdown>
                                 </details>
@@ -243,7 +244,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
 
                             {/* 文本内容 */}
                             {msg.content && (
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
                                     {searchTerm ? highlightText(msg.content) : msg.content}
                                 </ReactMarkdown>
                             )}

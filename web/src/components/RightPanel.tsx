@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { sendRpc } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { CodeBlock, PreBlock } from './CodeBlock'
 
 type TabName = 'skills' | 'mcp' | 'soul' | 'plugins' | 'messaging';
 
@@ -489,7 +490,7 @@ function SkillsTab() {
                                 </pre>
                             ) : (
                                 <div className="markdown-body" style={{ color: 'var(--text, #eee)', fontSize: 14, lineHeight: 1.6 }}>
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
                                         {selectedSkillContent}
                                     </ReactMarkdown>
                                 </div>

@@ -552,6 +552,11 @@ option {
   text-decoration: underline;
 }
 
+.code-block-wrapper {
+  position: relative;
+  margin: 10px 0;
+}
+
 .chat-msg pre {
   background: #000 !important;
   padding: 12px 14px;
@@ -559,9 +564,43 @@ option {
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 13px;
-  margin: 10px 0;
+  margin: 0;
   border: 1px solid var(--border);
   line-height: 1.5;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  z-index: 10;
+  opacity: 0;
+}
+
+.code-block-wrapper:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-elevated);
+}
+
+.copy-btn.copied {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .chat-msg code {
@@ -570,10 +609,13 @@ option {
 }
 
 .chat-msg :not(pre)>code {
-  background: var(--bg-elevated);
+  background: #000 !important;
+  color: var(--accent);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12.5px;
+  border: 1px solid var(--border);
+  font-weight: 500;
 }
 
 /* ─── Tool Call UI (Inline & Block) ─── */
