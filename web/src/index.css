@@ -515,6 +515,7 @@ option {
   background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-elevated) 100%);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
+  white-space: pre-wrap;
 }
 
 .chat-msg.agent {
