@@ -1003,9 +1003,14 @@ export class TaskEngine {
 
                     await activeLLM.generateResponseStream(prompt, (event) => {
                         if (event.type === 'text') {
-                            fullResponseText += event.data;
-                            process.stdout.write(event.data);
-                            this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId });
+                            if (event.replace) {
+                                fullResponseText = event.data;
+                                // We can't easily rewrite stdout, so just print a small indicator or the delta if we wanted to
+                            } else {
+                                fullResponseText += event.data;
+                                process.stdout.write(event.data);
+                            }
+                            this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId, replace: event.replace });
                         } else if (event.type === 'tool_call_start') {
                             const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
                             pendingToolCalls.push(newCall);

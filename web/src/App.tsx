@@ -108,11 +108,13 @@ function App() {
 
   // 接收 Agent 流式文本
   useEvent('agent:text', (msg: RpcMessage) => {
-    const chunk = msg.data as { text: string; id: string }
+    const chunk = msg.data as { text: string; id: string; replace?: boolean }
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === 'agent' && last.id === chunk.id) {
-        return [...prev.slice(0, -1), { ...last, content: last.content + chunk.text }]
+        // replace=true 表示累积流，直接替换全部内容；否则追加 delta
+        const newContent = chunk.replace ? chunk.text : last.content + chunk.text
+        return [...prev.slice(0, -1), { ...last, content: newContent }]
       }
       return [...prev, { id: chunk.id, role: 'agent', content: chunk.text, timestamp: Date.now() }]
     })
@@ -259,6 +261,9 @@ function App() {
         attachments,
       }
       setMessages((prev) => [...prev, userMsg])
+
+      // 立即进入持续执行状态，触发显示暂停按钮
+      setAgentStreaming(true)
 
       // 通过 RPC 提交任务
       sendRpc('task:submit', { prompt: text, mode, attachments })

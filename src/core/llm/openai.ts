@@ -8,13 +8,18 @@ import {
     StandardToolResult
 } from './provider.js';
 
+// DeepSeek, Groq 等兼容 OpenAI 格式但不支持 embedding 端点的 Provider
+const NON_EMBEDDING_PATTERNS = ['deepseek', 'groq', 'together', 'fireworks', 'mistral', 'perplexity'];
+
 export class OpenAIAdapter implements ILLMProvider {
     private client: OpenAI;
     private modelName: string;
+    private baseURL?: string;
 
     constructor(apiKey: string, modelName: string = 'gpt-4o', baseURL?: string) {
         this.client = new OpenAI({ apiKey, baseURL });
         this.modelName = modelName;
+        this.baseURL = baseURL;
     }
 
     async generateResponseStream(
@@ -150,34 +155,24 @@ export class OpenAIAdapter implements ILLMProvider {
                                 onEvent({ type: 'text', data: newText });
                                 continue;
                             } else {
-                                if (newText.length > lastEmittedText.length && newText.startsWith(lastEmittedText)) {
+                                const cleanNew = newText.trim();
+                                const cleanOld = lastEmittedText.trim();
+                                if (cleanNew.length >= cleanOld.length && cleanOld.length >= 5 && cleanNew.startsWith(cleanOld.substring(0, 5))) {
                                     isCumulativeStream = true;
-                                } else if (newText !== lastEmittedText) {
+                                } else if (cleanNew !== cleanOld) {
                                     isCumulativeStream = false;
                                 }
-                                // If newText === lastEmittedText, remain undefined, and fall through to act like cumulative (ignore duplicate) to avoid corrupting the history.
                             }
                         }
 
                         if (isCumulativeStream === true || isCumulativeStream === undefined) {
                             if (newText === lastEmittedText) {
-                                // Ignore duplicate
                                 continue;
-                            } else if (newText.startsWith(lastEmittedText)) {
-                                const actualDelta = newText.slice(lastEmittedText.length);
-                                onEvent({ type: 'text', data: actualDelta });
-                                lastEmittedText = newText;
                             } else {
-                                if (isCumulativeStream === undefined) {
-                                    // It didn't start with history, so it must be a delta stream after all!
-                                    isCumulativeStream = false;
-                                    onEvent({ type: 'text', data: newText });
-                                    lastEmittedText += newText;
-                                } else {
-                                    // Forced fallback in true cumulative mode
-                                    onEvent({ type: 'text', data: newText });
-                                    lastEmittedText += newText;
-                                }
+                                // Robust cumulative handling: tell the frontend to replace the entire text
+                                // This prevents duplicated prefixes caused by proxy formatting anomalies
+                                onEvent({ type: 'text', data: newText, replace: true });
+                                lastEmittedText = newText;
                             }
                         } else {
                             onEvent({ type: 'text', data: newText });
@@ -215,14 +210,16 @@ export class OpenAIAdapter implements ILLMProvider {
     }
 
     supportsEmbedding(): boolean {
-        return true;
+        // 只有原生 OpenAI API 支持 embedding，DeepSeek 等兼容 API 不支持
+        if (!this.baseURL) return true;
+        const url = this.baseURL.toLowerCase();
+        return !NON_EMBEDDING_PATTERNS.some(p => url.includes(p));
     }
 
     async generateEmbedding(text: string): Promise<number[]> {
         const response = await this.client.embeddings.create({
-            model: this.modelName,
+            model: 'text-embedding-3-small',
             input: text,
-            dimensions: 1536
         });
         return response.data[0].embedding;
     }

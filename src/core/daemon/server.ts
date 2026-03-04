@@ -122,11 +122,19 @@ export class DaemonServer extends EventEmitter {
                     'X-Content-Type-Options': 'nosniff',
                 });
 
+                // 强制单客户端：关闭所有旧的 SSE 连接，防止页面刷新后幽灵连接累积
+                for (const oldClient of this.sseClients) {
+                    if (!oldClient.writableEnded) {
+                        try { oldClient.end(); } catch { /* ignore */ }
+                    }
+                }
+                this.sseClients.clear();
+
                 // 发送连接成功事件
                 res.write(`data: ${JSON.stringify({ type: 'event', name: 'server.connected', data: {} })}\n\n`);
 
                 this.sseClients.add(res);
-                console.log(`[Daemon] SSE client connected. Total: ${this.sseClients.size}`);
+                console.log(`[Daemon] SSE client connected (enforced single-client). Total: ${this.sseClients.size}`);
 
                 // 心跳：每 15 秒发送，防止代理或浏览器超时断开
                 const heartbeat = setInterval(() => {
@@ -263,12 +271,23 @@ export class DaemonServer extends EventEmitter {
             }
         }
 
-        // SSE clients (primary, no ghost connection issues)
+        // SSE clients (primary)
         const sseData = `data: ${payload}\n\n`;
+        const deadClients: http.ServerResponse[] = [];
         for (const res of this.sseClients) {
-            if (!res.writableEnded) {
-                res.write(sseData);
+            if (res.writableEnded || res.destroyed) {
+                deadClients.push(res);
+            } else {
+                try {
+                    res.write(sseData);
+                } catch {
+                    deadClients.push(res);
+                }
             }
+        }
+        // 清理已断开的僵尸连接
+        for (const dead of deadClients) {
+            this.sseClients.delete(dead);
         }
     }
 

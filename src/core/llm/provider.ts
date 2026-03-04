@@ -33,6 +33,7 @@ export interface StandardToolResult {
 export interface AgentMessageEvent {
     type: 'text' | 'tool_call_start' | 'tool_call_chunk' | 'tool_call_end' | 'done' | 'error' | 'reasoning_chunk';
     data?: any;
+    replace?: boolean; // Used for cumulative streams to replace entire text
 }
 
 export interface StandardPrompt {

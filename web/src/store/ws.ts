@@ -42,26 +42,45 @@ export interface ApprovalInfo {
 
 type EventHandler = (msg: RpcMessage) => void;
 
+// ─── 模块级状态 ───
 let callIdCounter = 1;
 const eventHandlers = new Map<string, Set<EventHandler>>();
-
-// ─── SSE: 用于接收服务端事件（单向，仿 opencode /event）───
 let sseSource: EventSource | null = null;
+let sseConnected = false;
+
+// ─── HMR 安全措施：Vite 热替换时清空所有旧 handler ───
+if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+        // 模块被替换前，清空所有 handler 防止幽灵回调
+        eventHandlers.clear();
+        if (sseSource) {
+            sseSource.close();
+            sseSource = null;
+        }
+    });
+}
 
 /**
  * 连接到后端 SSE 事件流。
- * EventSource 由浏览器原生管理，自带断线重连，不会因 HMR / StrictMode 产生幽灵连接。
+ * EventSource 由浏览器原生管理，自带断线重连。
  */
 function connectSSE(url: string, onStatusChange: (s: boolean) => void): EventSource {
+    // 先关闭任何已有连接
+    if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+    }
+
     const es = new EventSource(url);
 
     es.onopen = () => {
+        sseConnected = true;
         onStatusChange(true);
     };
 
     es.onerror = () => {
+        sseConnected = false;
         onStatusChange(false);
-        // EventSource 自动在内部断线重连，无需手动 setTimeout
     };
 
     es.onmessage = (event) => {
@@ -81,11 +100,12 @@ function connectSSE(url: string, onStatusChange: (s: boolean) => void): EventSou
         }
     };
 
+    sseSource = es;
     return es;
 }
 
 /**
- * 发送 RPC 请求并异步等待响应（使用 HTTP POST，消除 WebSocket 时序和断线问题）。
+ * 发送 RPC 请求（HTTP POST）。
  */
 export async function sendRpc<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     const id = String(callIdCounter++);
@@ -124,44 +144,65 @@ export function onEvent(eventName: string, handler: EventHandler): () => void {
 
 /**
  * React Hook: 管理 SSE 连接生命周期。
- * - SSE (`EventSource`): 接收服务端事件流（单向，不会因 HMR 产生幽灵连接）
- * - HTTP fetch: 仅用于发送 RPC 请求
+ * 使用 useRef 防止 StrictMode 双重挂载导致重复连接。
  */
 export function useWebSocket() {
-    const [connected, setConnected] = useState(false);
-    const initialized = useRef(false);
+    const [connected, setConnected] = useState(sseConnected);
+    const cleanupRef = useRef<(() => void) | null>(null);
 
     useEffect(() => {
-        if (initialized.current) return;
-        initialized.current = true;
+        // 如果已有 SSE 连接且仍然活跃，复用它
+        if (sseSource && sseSource.readyState !== EventSource.CLOSED) {
+            setConnected(sseConnected);
+            return;
+        }
 
         const sseUrl = `${window.location.origin}/events`;
+        connectSSE(sseUrl, setConnected);
 
-        // SSE: 接收所有服务端事件
-        sseSource = connectSSE(sseUrl, setConnected);
-
-        return () => {
+        cleanupRef.current = () => {
             if (sseSource) {
                 sseSource.close();
                 sseSource = null;
+                sseConnected = false;
             }
-            initialized.current = false;
         };
+
+        // StrictMode 下不要在 cleanup 中关闭 SSE
+        // 因为 StrictMode 会 mount → unmount → mount，如果 cleanup 关了连接，
+        // 第二次 mount 又重新连，会导致服务端看到两次连接。
+        // 只在组件真正卸载时（页面跳转）关闭。
+        return undefined;
     }, []);
 
     const rpc = useCallback(sendRpc, []);
-
     return { connected, sendRpc: rpc };
 }
 
 /**
  * React Hook: 监听特定事件。
+ * 关键：每次 effect 执行都注册新 handler 并清理旧 handler，
+ * 确保 StrictMode 双重挂载不会累积多个 handler。
  */
 export function useEvent(eventName: string, handler: EventHandler) {
     const savedHandler = useRef(handler);
     savedHandler.current = handler;
 
+    // 用一个稳定的 ref 持有 unsubscribe 函数
+    const unsubRef = useRef<(() => void) | null>(null);
+
     useEffect(() => {
-        return onEvent(eventName, (msg) => savedHandler.current(msg));
+        // 先清理上一次注册的 handler（防止 StrictMode 累积）
+        if (unsubRef.current) {
+            unsubRef.current();
+        }
+
+        const unsub = onEvent(eventName, (msg) => savedHandler.current(msg));
+        unsubRef.current = unsub;
+
+        return () => {
+            unsub();
+            unsubRef.current = null;
+        };
     }, [eventName]);
 }

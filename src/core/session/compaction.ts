@@ -15,8 +15,8 @@ import { Session } from './state.js';
 import { getLogger } from '../logger/index.js';
 
 // ─── 配置常量 ───
-const COMPACTION_THRESHOLD = 20;  // 相较于之前 40，提前截断防止过长 session OOM
-const KEEP_RECENT = 10;           // 保留最近 N 条消息
+const COMPACTION_THRESHOLD = 60;  // 消息数超过此值时自动压缩
+const KEEP_RECENT = 16;           // 保留最近 N 条消息
 
 const COMPACTION_SYSTEM_PROMPT = `You are a context compactor for an Agent system. Your goal is to drastically compress the provided conversation history into EXTREMELY concise bullet points.
 
