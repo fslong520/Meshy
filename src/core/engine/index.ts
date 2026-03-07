@@ -2,6 +2,8 @@ import { ILLMProvider, StandardPrompt } from '../llm/provider.js';
 import { ProviderResolver } from '../llm/resolver.js';
 import { AgentComputerInterface } from '../aci/index.js';
 import { Session } from '../session/state.js';
+import { ToolOutputOffloader } from './offloader.js';
+import { ProgressTracker } from '../session/progress.js';
 import { IntentRouter } from '../router/intent.js';
 import { InputParser, ParsedInput } from '../router/input-parser.js';
 import { SystemPromptBuilder } from '../router/prompt-builder.js';
@@ -152,6 +154,12 @@ export class TaskEngine {
     private abortController: AbortController | null = null;
     public isRunning: boolean = false;
 
+    // Phase 20: Tool Output Offloader
+    private offloader: ToolOutputOffloader;
+
+    // Phase 20: Progress Tracker
+    private progressTracker: ProgressTracker;
+
     // Phase 15: Custom Commands
     private customCommands: CustomCommandRegistry;
 
@@ -215,6 +223,13 @@ export class TaskEngine {
 
         // Phase 14: Compaction Agent
         this.compactionAgent = new CompactionAgent(this.providerResolver.getProvider());
+
+        // Phase 20: Tool Output Offloader
+        this.offloader = new ToolOutputOffloader(workspace.rootPath);
+        this.offloader.cleanup(); // Clean up stale tool output files on startup
+
+        // Phase 20: Progress Tracker
+        this.progressTracker = new ProgressTracker(workspace.rootPath);
     }
 
     /**
@@ -774,6 +789,13 @@ export class TaskEngine {
             .withEnvironmentContext(process.platform, this.workspace.rootPath);
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
+
+        // Phase 20: Inject cross-session progress context
+        const progressContext = this.progressTracker.getRecentProgress();
+        if (progressContext && this.session.history.length <= 1) {
+            builder.withConstraint(`\n## Previous Session Progress\nThe following is a summary of work done in previous sessions on this project:\n${progressContext}`);
+        }
+
         if (catalogAdvert || mcpAdvert) {
             builder.withCatalogAdvert((catalogAdvert + mcpAdvert).trim());
         }
@@ -978,6 +1000,15 @@ export class TaskEngine {
                     if (this.compactionAgent.shouldCompact(this.session)) {
                         this.logger.engine('Session exceeds compaction threshold, auto-compacting...');
                         await this.compactionAgent.compact(this.session);
+
+                        // Phase 20: Write progress entry after compaction
+                        this.progressTracker.appendEntry({
+                            sessionId: this.session.id,
+                            timestamp: new Date().toISOString(),
+                            summary: typeof this.session.history[0]?.content === 'string'
+                                ? this.session.history[0].content.slice(0, 500)
+                                : 'Session compacted.',
+                        });
                     }
                     const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
                     const mcpTools = this.workspace.mcpHost.getAllTools();
@@ -1067,13 +1098,16 @@ export class TaskEngine {
                     const results = await Promise.all(executionPromises);
 
                     // 3. Add ALL tool_result messages to history in order
+                    // Phase 20: Offload large tool outputs to files
                     for (const { id, result } of results) {
+                        const toolName = pendingToolCalls.find(c => c.id === id)?.name ?? 'unknown';
+                        const offloadResult = this.offloader.process(toolName, id, String(result));
                         this.addMessageAndAppend({
                             role: 'user',
                             content: {
                                 type: 'tool_result',
                                 id: id,
-                                content: result,
+                                content: offloadResult.content,
                             },
                         });
                     }

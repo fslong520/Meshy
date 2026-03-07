@@ -116,16 +116,12 @@ export class Session {
     }
 
     /**
-     * Compresses or truncates history if it gets too long.
-     * A true implementation would summarize older events or use RAG.
+     * @deprecated All compression is now handled by CompactionAgent (compaction.ts).
+     * This method is kept as a no-op for backward compatibility.
      */
     public compressHistory(): void {
-        if (this.history.length > 50) {
-            // Keep the system prompt + recent 20 messages to save context limit
-            const systemPrompts = this.history.filter(m => m.role === 'system');
-            const recent = this.history.slice(-20);
-            this.history = [...systemPrompts, ...recent];
-        }
+        // No-op: Compression is now handled exclusively by CompactionAgent
+        // to ensure a proper LLM-summarized compaction instead of brute-force truncation.
     }
 
     public serialize(): string {
