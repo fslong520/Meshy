@@ -109,6 +109,46 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
         return text.replace(regex, '**$1**')
     }
 
+    // Helper: Determine message status for minimap
+    const getMessageStatus = (msg: ChatMessage): string => {
+        if (msg.role === 'user') return 'msg-user'
+        if (msg.approval && !msg.approval.resolved) return 'msg-approval'
+        
+        let hasError = false
+        let hasRunning = false
+        let hasSuccess = false
+
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+            for (const tc of msg.toolCalls) {
+                if (tc.status === 'error') hasError = true
+                else if (tc.status === 'running') hasRunning = true
+                else if (tc.status === 'done') hasSuccess = true
+            }
+        }
+
+        if (hasError) return 'msg-error'
+        if (hasRunning) return 'msg-running'
+        if (hasSuccess) return 'msg-success'
+        
+        return 'msg-assistant'
+    }
+
+    const scrollToMessage = (id: string) => {
+        const el = document.getElementById(id)
+        if (el && scrollRef.current) {
+            // Calculate relative offset to scroll container
+            const containerTop = scrollRef.current.scrollTop
+            const containerScrollTop = scrollRef.current.getBoundingClientRect().top
+            const elementTop = el.getBoundingClientRect().top
+            
+            // smooth scroll
+            scrollRef.current.scrollTo({
+                top: containerTop + elementTop - containerScrollTop - 20,
+                behavior: 'smooth'
+            })
+        }
+    }
+
     return (
         <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
             {/* Session Header */}
@@ -194,6 +234,24 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                 </button>
             </div>
 
+            {/* Chat Minimap */}
+            {messages.length > 0 && (
+                <div className="chat-minimap-container">
+                    {messages.map((msg, i) => {
+                        const domId = `msg-${msg.id || i}`
+                        const statusClass = getMessageStatus(msg)
+                        return (
+                            <div 
+                                key={`minimap-${msg.id || i}`} 
+                                className={`minimap-sq ${statusClass}`}
+                                title={`${msg.role} message`}
+                                onClick={() => scrollToMessage(domId)}
+                            />
+                        )
+                    })}
+                </div>
+            )}
+
             {/* 消息流 */}
             <div className="chat-messages" ref={scrollRef}>
                 {messages.length === 0 && (
@@ -231,7 +289,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                     }
 
                     return (
-                        <div key={msg.id || i} className={`chat-msg ${msg.role}`}>
+                        <div id={`msg-${msg.id || i}`} key={msg.id || i} className={`chat-msg ${msg.role}`}>
                             {/* 思考过程 (DeepSeek-Reasoner) */}
                             {msg.reasoningContent && (
                                 <details className="reasoning-block">
