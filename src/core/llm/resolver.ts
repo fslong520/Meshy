@@ -6,8 +6,7 @@
  */
 
 import { ILLMProvider } from './provider.js';
-import { OpenAIAdapter } from './openai.js';
-import { AnthropicAdapter } from './anthropic.js';
+import { VercelAIAdapter } from './vercel-ai.js';
 import { LocalEmbeddingAdapter } from './local-embedding.js';
 import { Config, ProviderConfig } from '../../config/index.js';
 
@@ -243,9 +242,9 @@ export class ProviderResolver {
         let instance: ILLMProvider;
 
         if (cfg.protocol === 'openai') {
-            instance = new OpenAIAdapter(cfg.apiKey, modelId, cfg.baseUrl);
+            instance = new VercelAIAdapter('openai', cfg.apiKey, modelId, cfg.baseUrl);
         } else if (cfg.protocol === 'anthropic') {
-            instance = new AnthropicAdapter(cfg.apiKey, modelId, cfg.baseUrl);
+            instance = new VercelAIAdapter('anthropic', cfg.apiKey, modelId, cfg.baseUrl);
         } else {
             throw new Error(`Unsupported protocol "${cfg.protocol}" for provider "${providerName}".`);
         }
