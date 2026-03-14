@@ -63,13 +63,18 @@ export class Session {
         this.backgroundProcesses = [];
     }
 
+    public touch() {
+        this.updatedAt = new Date().toISOString();
+    }
+
     public addMessage(message: StandardMessage) {
         this.history.push(message);
-        this.updatedAt = new Date().toISOString();
+        this.touch();
     }
 
     public updateBlackboard(updates: Partial<BlockboardState>) {
         this.blackboard = { ...this.blackboard, ...updates };
+        this.touch();
     }
 
     // ─── Pinned Tools（持久，跨轮） ───

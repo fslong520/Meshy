@@ -169,7 +169,7 @@ function App() {
       setActiveSession(null)
       setBbGoal('')
       setBbTasks([])
-    } else {
+    } else if (data.sessionId !== activeSession?.id) {
       handleSessionSwitch(data.sessionId)
     }
   })
@@ -359,13 +359,14 @@ function App() {
     if (!activeSession) return
 
     if (action === 'delete') {
-      sendRpc<{ success: boolean }>('session:delete', { id: activeSession.id }).then(res => {
+      sendRpc<{ success: boolean; activeSessionId?: string }>('session:delete', { id: activeSession.id }).then(res => {
         if (res?.success) {
-          // LeftSidebar will auto-refresh via interval or we can trigger a refresh
-          // App.tsx doesn't manage the session list, LeftSidebar does.
-          // However we clear the screen:
-          setMessages([])
-          setActiveSession(null)
+          if (res.activeSessionId) {
+            handleSessionSwitch(res.activeSessionId)
+          } else {
+            setMessages([])
+            setActiveSession(null)
+          }
         }
       })
     } else if (action === 'rename' && payload?.title) {

@@ -5,13 +5,21 @@ import { z } from 'zod';
 import { ExecutionMode } from '../core/security/modes.js';
 
 // ─── Provider 连接配置 ───
+const modelConfigSchema = z.object({
+    name: z.string().optional(),
+    description: z.string().optional(),
+}).default({});
+
 const providerConfigSchema = z.object({
-    protocol: z.enum(['openai', 'anthropic']),
+    protocol: z.string().optional(), // 协议 (openai, anthropic, etc.)
+    sdk: z.string().optional(),      // 对应 Vercel AI SDK 的 Provider 包名，如 @ai-sdk/anthropic
     baseUrl: z.string().optional(),
     apiKey: z.string(),
+    models: z.record(z.string(), modelConfigSchema).optional(), // 该 Provider 下允许的模型列表
 });
 
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+export type ModelConfig = z.infer<typeof modelConfigSchema>;
 
 // ─── 主配置 Schema ───
 export const configSchema = z.object({

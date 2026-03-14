@@ -36,9 +36,6 @@ export class SessionManager {
         this.sessionsDir = path.join(workspaceRoot, '.meshy', 'sessions');
     }
 
-    /**
-     * List all persisted sessions with lightweight metadata (no full history).
-     */
     public listSessions(): SessionSummary[] {
         const summaries: SessionSummary[] = [];
 
@@ -46,15 +43,20 @@ export class SessionManager {
             return summaries;
         }
 
+        // 1. 获取文件列表并按修改时间倒序排列
         const files = fs.readdirSync(this.sessionsDir)
-            .filter(f => f.endsWith('.jsonl') || f.endsWith('.json'));
+            .filter(f => f.endsWith('.jsonl') || f.endsWith('.json'))
+            .map(f => {
+                const filePath = path.join(this.sessionsDir, f);
+                const stats = fs.statSync(filePath);
+                return { name: f, filePath, mtime: stats.mtime.toISOString() };
+            })
+            .sort((a, b) => b.mtime.localeCompare(a.mtime));
 
-        for (const file of files) {
+        for (const fileInfo of files) {
             try {
-                const filePath = path.join(this.sessionsDir, file);
-
-                // Read up to 64KB to snag the first line (metadata) efficiently
-                const fd = fs.openSync(filePath, 'r');
+                // Read up to 64KB for metadata
+                const fd = fs.openSync(fileInfo.filePath, 'r');
                 const buffer = Buffer.alloc(65536);
                 const bytesRead = fs.readSync(fd, buffer, 0, 65536, 0);
                 fs.closeSync(fd);
@@ -64,29 +66,38 @@ export class SessionManager {
                 const parsed = JSON.parse(firstLine || '{}');
 
                 summaries.push({
-                    id: parsed.id || file.replace(/\.jsonl?$/, ''),
+                    id: parsed.id || fileInfo.name.replace(/\.jsonl?$/, ''),
                     status: parsed.status || 'active',
                     createdAt: parsed.createdAt || 'unknown',
-                    updatedAt: parsed.updatedAt || 'unknown',
+                    // 优先使用文件的 mtime 作为 updatedAt，因为它最真实反映了“最后活动”
+                    updatedAt: fileInfo.mtime,
                     goal: parsed.blackboard?.currentGoal || '(no goal)',
                     title: parsed.title || '',
-                    messageCount: parsed.history?.length || 0, // In .jsonl, this will be 0 on summary, but that's fine
+                    messageCount: parsed.history?.length || 0,
                 });
             } catch {
-                // Skip corrupted files silently
+                // Skip corrupted files
             }
         }
 
-        // Sort by updatedAt descending (most recently active first)
-        summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         return summaries;
     }
 
     /**
-     * Create a fresh new session.
+     * Create a fresh new session with a human-readable, sortable, and unique ID.
      */
     public createSession(): Session {
-        const session = new Session(`session-${Date.now()}`);
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hour = String(now.getHours()).padStart(2, '0');
+        const min = String(now.getMinutes()).padStart(2, '0');
+        const sec = String(now.getSeconds()).padStart(2, '0');
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        
+        const id = `${year}${month}${day}${hour}${min}${sec}${ms}`;
+        const session = new Session(id);
         return session;
     }
 

@@ -12,7 +12,8 @@ import { Config, ProviderConfig } from '../../config/index.js';
 
 export interface ProviderInfo {
     name: string;
-    protocol: string;
+    protocol?: string;
+    sdk?: string;
     baseUrl?: string;
     hasApiKey: boolean;
 }
@@ -124,6 +125,7 @@ export class ProviderResolver {
         return Object.entries(this.config.providers).map(([name, cfg]) => ({
             name,
             protocol: cfg.protocol,
+            sdk: cfg.sdk,
             baseUrl: cfg.baseUrl,
             hasApiKey: !!cfg.apiKey,
         }));
@@ -167,7 +169,7 @@ export class ProviderResolver {
                 models.unshift(defaultModelId);
             }
 
-            result[name] = { protocol: cfg.protocol, models };
+            result[name] = { protocol: cfg.protocol || cfg.sdk || 'unknown', models };
         }
 
         this.cachedModels = result;
@@ -195,6 +197,19 @@ export class ProviderResolver {
                 result[provider].push(modelId);
             }
         }
+
+        // 提取各 provider 下定义的 models 列表
+        for (const [providerName, cfg] of Object.entries(this.config.providers)) {
+            if (cfg.models) {
+                if (!result[providerName]) result[providerName] = [];
+                for (const modelId of Object.keys(cfg.models)) {
+                    if (!result[providerName].includes(modelId)) {
+                        result[providerName].push(modelId);
+                    }
+                }
+            }
+        }
+
         return result;
     }
 
@@ -241,13 +256,14 @@ export class ProviderResolver {
 
         let instance: ILLMProvider;
 
-        if (cfg.protocol === 'openai') {
-            instance = new VercelAIAdapter('openai', cfg.apiKey, modelId, cfg.baseUrl);
-        } else if (cfg.protocol === 'anthropic') {
-            instance = new VercelAIAdapter('anthropic', cfg.apiKey, modelId, cfg.baseUrl);
-        } else {
-            throw new Error(`Unsupported protocol "${cfg.protocol}" for provider "${providerName}".`);
+        // 优先级：显式配置的 sdk (包名) > legacy protocol
+        const sdkOrProtocol = cfg.sdk || cfg.protocol;
+
+        if (!sdkOrProtocol) {
+            throw new Error(`Provider "${providerName}" has neither "sdk" nor "protocol" configured.`);
         }
+
+        instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey, modelId, cfg.baseUrl);
 
         this.instances.set(cacheKey, instance);
         return instance;

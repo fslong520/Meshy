@@ -410,18 +410,38 @@ export async function runServer(port: number) {
             if (!id) throw new Error('Session ID is required');
             await sessionManager.deleteSession(id, activeWorkspace.memoryStore);
 
-            // If deleting active session, reset reference but don't auto-create one
+            let newActiveId = session.id;
+            
+            // If deleting active session, pick the next available or create new
             if (session.id === id) {
-                // Return no activeSessionId so UI knows it's empty
+                const remaining = sessionManager.listSessions();
+                if (remaining.length > 0) {
+                    const loaded = sessionManager.loadSession(remaining[0].id);
+                    if (loaded) {
+                        session = loaded;
+                        engine.setSession(loaded);
+                        newActiveId = session.id;
+                    }
+                } else {
+                    const fresh = sessionManager.createSession();
+                    session = fresh;
+                    engine.setSession(fresh);
+                    newActiveId = fresh.id;
+                }
             }
 
             daemon.sendResponse(ws, msgId, {
                 success: true,
                 sessions: sessionManager.listSessions(),
-                activeSessionId: (session.id === id) ? null : session.id
+                activeSessionId: newActiveId
             });
             // Update all connected clients' sidebars
             daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });
+            
+            // If the active session changed due to deletion, notify UI to switch context
+            if (newActiveId !== session.id || id === params.id) {
+                 daemon.broadcast('agent:session_changed', { sessionId: newActiveId });
+            }
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }

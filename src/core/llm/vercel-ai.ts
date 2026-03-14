@@ -10,42 +10,53 @@ import {
 // Some providers don't natively support embeddings
 const NON_EMBEDDING_PATTERNS = ['deepseek', 'groq', 'together', 'fireworks', 'mistral', 'perplexity'];
 
+const BUNDLED_PROVIDERS: Record<string, (options: any) => any> = {
+    'openai': createOpenAI,
+    '@ai-sdk/openai': createOpenAI,
+    'anthropic': createAnthropic,
+    '@ai-sdk/anthropic': createAnthropic,
+};
+
 export class VercelAIAdapter implements ILLMProvider {
-    private providerName: 'openai' | 'anthropic';
+    private sdkIdentifier: string;
     private apiKey: string;
     private baseURL?: string;
     private modelId: string;
     private model: any;
 
     constructor(
-        providerName: 'openai' | 'anthropic',
+        sdkIdentifier: string,
         apiKey: string,
         modelId: string,
         baseURL?: string
     ) {
-        this.providerName = providerName;
+        this.sdkIdentifier = sdkIdentifier;
         this.apiKey = apiKey;
         this.modelId = modelId;
         this.baseURL = baseURL;
 
-        if (providerName === 'openai') {
+        const factory = BUNDLED_PROVIDERS[sdkIdentifier];
+        if (factory) {
+            let normalizedBaseURL = baseURL;
+            if (sdkIdentifier.includes('anthropic')) {
+                normalizedBaseURL = baseURL?.replace(/\/v1\/?$/, '') || undefined;
+            }
+
+            const sdk = factory({
+                apiKey,
+                baseURL: normalizedBaseURL,
+                headers: { 'x-api-key': apiKey }
+            });
+            this.model = sdk(modelId);
+        } else {
+            // Fallback: 尝试作为 openai 兼容层处理 (许多中转站支持 openai sdk)
+            console.warn(`[VercelAIAdapter] SDK "${sdkIdentifier}" not explicitly bundled. Falling back to OpenAI compatibility mode.`);
             const openai = createOpenAI({
                 apiKey,
                 baseURL,
                 headers: { 'x-api-key': apiKey }
             });
             this.model = openai(modelId);
-        } else if (providerName === 'anthropic') {
-            // Anthropic typically appends /v1/messages internally, adjust the URL context if needed
-            const normalizedBaseURL = baseURL?.replace(/\/v1\/?$/, '') || undefined;
-            const anthropic = createAnthropic({
-                apiKey,
-                baseURL: normalizedBaseURL,
-                headers: { 'x-api-key': apiKey }
-            });
-            this.model = anthropic(modelId);
-        } else {
-            throw new Error(`Unsupported ai-sdk provider protocol: ${providerName}`);
         }
     }
 
