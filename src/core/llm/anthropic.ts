@@ -168,12 +168,16 @@ export class AnthropicAdapter implements ILLMProvider {
             try {
                 const modelsUrl = this.originalBaseUrl.replace(/\/$/, '') + '/models';
                 const response = await fetch(modelsUrl, {
-                    headers: { 'Authorization': `Bearer ${this.apiKey}` },
+                    headers: { 
+                        'Authorization': `Bearer ${this.apiKey}`,
+                        'x-api-key': this.apiKey
+                    },
                 });
                 if (response.ok) {
-                    const data = await response.json() as { data?: Array<{ id: string }> };
-                    if (data.data && Array.isArray(data.data)) {
-                        return data.data.map(m => m.id);
+                    const data = await response.json() as { data?: Array<{ id: string }>, models?: Array<{ id: string }> };
+                    const modelsList = data.data || data.models;
+                    if (modelsList && Array.isArray(modelsList)) {
+                        return modelsList.map(m => m.id);
                     }
                 }
             } catch (err) {
