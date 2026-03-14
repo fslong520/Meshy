@@ -224,16 +224,36 @@ export class McpHostRuntime {
     }
 
     /**
-     * 获取所有已发现的 MCP 工具列表，转译为平台 StandardTool 格式。
+     * 获取 MCP 工具列表（按需加载机制）：
+     * - 对于已经激活的 Server，返回其完整的所有 Tool Definition。
+     * - 对于未激活的 Server，只返回一个用于加载对应 Server 的元工具（Meta-Tool），
+     *   极大节省 Token 并提高 LLM 的指令聚焦度。
      */
-    public getAllTools(): StandardTool[] {
+    public getAllTools(activatedServers: Set<string>): StandardTool[] {
         const tools: StandardTool[] = [];
+
         for (const [serverName, instance] of this.servers) {
-            for (const tool of instance.tools) {
+            // 如果此服务器已被激活并加载了全量 Schema
+            if (activatedServers.has(serverName)) {
+                for (const tool of instance.tools) {
+                    tools.push({
+                        name: `mcp:${serverName}:${tool.name}`,
+                        description: `[MCP:${serverName}] ${tool.description}`,
+                        inputSchema: tool.inputSchema,
+                    });
+                }
+            } else {
+                // 如果未激活，仅暴露一个按需加载的 Meta Tool
+                // 这个描述必须足够清晰，让 LLM 知道如果要用这个领域的功能，得先调用此工具
+                const desc = instance.config.description || `Provides tools for ${serverName}`;
                 tools.push({
-                    name: `mcp:${serverName}:${tool.name}`,
-                    description: `[MCP:${serverName}] ${tool.description}`,
-                    inputSchema: tool.inputSchema,
+                    name: `_load_mcp_server_${serverName.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+                    description: `[Meta-Tool] Before using features related to "${serverName}", you MUST call this tool. Reason: ${desc}. This will load the full tool schemas for this server so you can use them in your next steps.`,
+                    inputSchema: {
+                        type: 'object',
+                        properties: {},
+                        required: [],
+                    },
                 });
             }
         }

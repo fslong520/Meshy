@@ -35,10 +35,12 @@ export class Session {
     public pinnedTools: Set<string>;
     /** ToolRAG 每轮动态检索的工具（每轮刷新） */
     public ragSelectedTools: Set<string>;
+    /** 已显式加载全部 Schema 的 MCP Servers */
+    public activatedMcpServers: Set<string>;
 
     /** 兼容属性：返回 pinned + ragSelected 的合集 */
     public get activatedTools(): Set<string> {
-        return new Set([...this.pinnedTools, ...this.ragSelectedTools]);
+        return new Set([...Array.from(this.pinnedTools), ...Array.from(this.ragSelectedTools)]);
     }
 
     constructor(id: string) {
@@ -52,6 +54,7 @@ export class Session {
         };
         this.pinnedTools = new Set();
         this.ragSelectedTools = new Set();
+        this.activatedMcpServers = new Set();
         const now = new Date().toISOString();
         this.createdAt = now;
         this.updatedAt = now;
@@ -133,6 +136,7 @@ export class Session {
             updatedAt: this.updatedAt,
             status: this.status,
             activeAgentId: this.activeAgentId,
+            activatedMcpServers: Array.from(this.activatedMcpServers),
         };
 
         let result = JSON.stringify(baseState) + '\n';
@@ -161,6 +165,9 @@ export class Session {
                 if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
                 if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
                 if (parsedMeta.status) session.status = parsedMeta.status;
+                if (parsedMeta.activatedMcpServers) {
+                    session.activatedMcpServers = new Set(parsedMeta.activatedMcpServers);
+                }
                 return session;
             }
         } catch (e) {
@@ -175,6 +182,9 @@ export class Session {
         if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
         if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
         if (parsedMeta.status) session.status = parsedMeta.status;
+        if (parsedMeta.activatedMcpServers) {
+            session.activatedMcpServers = new Set(parsedMeta.activatedMcpServers);
+        }
 
         // Replay events
         for (let i = 1; i < lines.length; i++) {

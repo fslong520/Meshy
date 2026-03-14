@@ -97,7 +97,7 @@ export class WorkerAgent {
             : allTools;
 
         // 也允许使用部分 MCP 外部工具（如配置允许，这里默认挂载）加上手动注入的 tools
-        const mcpTools = this.workspace.mcpHost.getAllTools();
+        const mcpTools = this.workspace.mcpHost.getAllTools(this.session.activatedMcpServers);
         const userInjectedTools = options?.injectedTools || [];
 
         // 为了去重，基于工具 name 过滤
@@ -217,6 +217,23 @@ export class WorkerAgent {
     }
 
     private async executeToolSilently(name: string, args: Record<string, unknown>): Promise<string> {
+        // Phase 4: Intercept Selective MCP Tool Loading (Meta-Tool)
+        if (name.startsWith('_load_mcp_server_')) {
+            const serverNameRaw = name.replace('_load_mcp_server_', '');
+            const serverSummaries = this.workspace.mcpHost.getServerSummaries();
+            const matchedServer = serverSummaries.find(s => 
+                s.name.replace(/[^a-zA-Z0-9_-]/g, '_') === serverNameRaw
+            );
+
+            if (matchedServer) {
+                this.session.activatedMcpServers.add(matchedServer.name);
+                console.log(`[Worker @${this.config.name}] Activated MCP Server schema for: ${matchedServer.name}`);
+                return `[System] Successfully loaded all tool schemas for MCP server "${matchedServer.name}". They will be available in the 'tools' array in your next turn. Please proceed with your actual task using the newly available tools.`;
+            } else {
+                return `Error: Could not resolve MCP server for ${serverNameRaw}`;
+            }
+        }
+
         // Phase 11: SecurityGuard check
         const decision = this.securityGuard.evaluate(name, args as Record<string, any>);
         if (!decision.allowed && !decision.requiresApproval) {

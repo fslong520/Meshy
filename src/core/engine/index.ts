@@ -157,8 +157,9 @@ export class TaskEngine {
     // Phase 20: Tool Output Offloader
     private offloader: ToolOutputOffloader;
 
-    // Phase 20: Progress Tracker
+    // Phase 20: Progress Tracker & Session Health
     private progressTracker: ProgressTracker;
+    private healthInspector: typeof import('../session/health-check.js').SessionHealthInspector['prototype'];
 
     // Phase 15: Custom Commands
     private customCommands: CustomCommandRegistry;
@@ -230,6 +231,10 @@ export class TaskEngine {
 
         // Phase 20: Progress Tracker
         this.progressTracker = new ProgressTracker(workspace.rootPath);
+
+        // Phase 20: Session Health Inspector
+        const { SessionHealthInspector } = require('../session/health-check.js');
+        this.healthInspector = new SessionHealthInspector(workspace.rootPath);
     }
 
     /**
@@ -790,10 +795,21 @@ export class TaskEngine {
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
 
-        // Phase 20: Inject cross-session progress context
+        // Phase 20: Inject cross-session progress context and Health Check
+        const isFirstTurn = this.session.history.length === 0;
+
         const progressContext = this.progressTracker.getRecentProgress();
         if (progressContext && this.session.history.length <= 1) {
             builder.withConstraint(`\n## Previous Session Progress\nThe following is a summary of work done in previous sessions on this project:\n${progressContext}`);
+        }
+
+        if (isFirstTurn) {
+            const healthReport = await this.healthInspector.inspectEnvironment(this.session);
+            if (!healthReport.isHealthy && healthReport.recommendation) {
+                // Force the agent to acknowledge and prioritize the broken environment
+                this.logger.warn('ENGINE', `Health Check Failed: ${healthReport.recommendation}`);
+                builder.withConstraint(`\n## 🚨 CRITICAL ENVIRONMENT WARNING 🚨\n${healthReport.recommendation}\n\nYou MUST address or acknowledge these issues in your first response before proceeding with the main task.`);
+            }
         }
 
         if (catalogAdvert || mcpAdvert) {
@@ -810,7 +826,6 @@ export class TaskEngine {
         // Attachments are natively passed in the user message content array
 
         // Phase 16: Ritual 上下文注入
-        const isFirstTurn = this.session.history.length === 0;
         const ritualContext = this.ritualLoader.buildPromptInjection(isFirstTurn);
         if (ritualContext) {
             builder.withRitualContext(ritualContext);
@@ -1011,7 +1026,7 @@ export class TaskEngine {
                         });
                     }
                     const registryTools = this.toolRegistry.toStandardTools(this.session.activatedTools);
-                    const mcpTools = this.workspace.mcpHost.getAllTools();
+                    const mcpTools = this.workspace.mcpHost.getAllTools(this.session.activatedMcpServers);
                     const allTools = [...registryTools, ...mcpTools, ...injection.tools];
 
                     const prompt: StandardPrompt = {
@@ -1330,6 +1345,28 @@ export class TaskEngine {
     }
 
     private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<{ output: string, isError?: boolean }> {
+        // ── Phase 4: Intercept Selective MCP Tool Loading (Meta-Tool) ──
+        if (name.startsWith('_load_mcp_server_')) {
+            // Extract server name from the meta-tool name
+            const serverNameRaw = name.replace('_load_mcp_server_', '');
+            // We need the original server name. The meta-tool replaced special chars with '_'.
+            // To be precise, we look up the server list to find the match.
+            const serverSummaries = this.workspace.mcpHost.getServerSummaries();
+            const matchedServer = serverSummaries.find(s => 
+                s.name.replace(/[^a-zA-Z0-9_-]/g, '_') === serverNameRaw
+            );
+
+            if (matchedServer) {
+                this.session.activatedMcpServers.add(matchedServer.name);
+                this.logger.engine(`[Selective Loading] Activated MCP Server schema for: ${matchedServer.name}`);
+                return { 
+                    output: `[System] Successfully loaded all tool schemas for MCP server "${matchedServer.name}". They will be available in the 'tools' array in your next turn. Please proceed with your actual task using the newly available tools.` 
+                };
+            } else {
+                return { output: `Error: Could not resolve MCP server for ${serverNameRaw}`, isError: true };
+            }
+        }
+
         // ── Phase 2: Agent Tool Whitelist Block ──
         if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(name)) {
             const reason = `[BLOCKED] Agent is not allowed to use tool "${name}". Please do not use this tool anymore.`;
