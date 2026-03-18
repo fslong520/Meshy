@@ -11,4 +11,5 @@ tests/
 test-*/
 public/
 .agent/
+.worktrees/
 vitest.config.ts
