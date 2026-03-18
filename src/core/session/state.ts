@@ -141,7 +141,11 @@ export class Session {
             updatedAt: this.updatedAt,
             status: this.status,
             activeAgentId: this.activeAgentId,
+            messageCount: this.history.length,
+            pinnedTools: Array.from(this.pinnedTools),
+            ragSelectedTools: Array.from(this.ragSelectedTools),
             activatedMcpServers: Array.from(this.activatedMcpServers),
+            backgroundProcesses: this.backgroundProcesses,
         };
 
         let result = JSON.stringify(baseState) + '\n';
@@ -167,6 +171,12 @@ export class Session {
                 session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
                 session.activeAgentId = parsedMeta.activeAgentId || 'default';
                 session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
+                if (Array.isArray(parsedMeta.pinnedTools)) {
+                    session.pinnedTools = new Set(parsedMeta.pinnedTools);
+                }
+                if (Array.isArray(parsedMeta.ragSelectedTools)) {
+                    session.ragSelectedTools = new Set(parsedMeta.ragSelectedTools);
+                }
                 if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
                 if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
                 if (parsedMeta.status) session.status = parsedMeta.status;
@@ -184,6 +194,12 @@ export class Session {
         session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
         session.activeAgentId = parsedMeta.activeAgentId || 'default';
         session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
+        if (Array.isArray(parsedMeta.pinnedTools)) {
+            session.pinnedTools = new Set(parsedMeta.pinnedTools);
+        }
+        if (Array.isArray(parsedMeta.ragSelectedTools)) {
+            session.ragSelectedTools = new Set(parsedMeta.ragSelectedTools);
+        }
         if (parsedMeta.createdAt) session.createdAt = parsedMeta.createdAt;
         if (parsedMeta.updatedAt) session.updatedAt = parsedMeta.updatedAt;
         if (parsedMeta.status) session.status = parsedMeta.status;

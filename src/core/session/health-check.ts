@@ -26,7 +26,7 @@ export class SessionHealthInspector {
     }
 
     /**
-     * Run all health checks. Should be called only when a session is new (history.length <= 1).
+     * Run all health checks. Should be called only when a session is new (history.length === 0).
      */
     public async inspectEnvironment(session: Session): Promise<HealthCheckResult> {
         const issues: string[] = [];
@@ -46,9 +46,9 @@ export class SessionHealthInspector {
         try {
             // Run a fast typecheck without emitting files
             // Timeout of 8s to prevent blocking the startup for too long
-            const { stdout } = await execAsync('npx tsc --noEmit', { 
+            const { stdout } = await execAsync('npm exec tsc --noEmit', {
                 cwd: this.workspaceRoot,
-                timeout: 8000 
+                timeout: 8000
             });
             // If it succeeds with 0 exit code, it's perfect.
         } catch (e: any) {

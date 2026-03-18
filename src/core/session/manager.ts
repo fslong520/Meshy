@@ -64,6 +64,9 @@ export class SessionManager {
                 const content = buffer.toString('utf-8', 0, bytesRead);
                 const firstLine = content.split('\n')[0];
                 const parsed = JSON.parse(firstLine || '{}');
+                const messageCount = typeof parsed.messageCount === 'number'
+                    ? parsed.messageCount
+                    : (Array.isArray(parsed.history) ? parsed.history.length : 0);
 
                 summaries.push({
                     id: parsed.id || fileInfo.name.replace(/\.jsonl?$/, ''),
@@ -73,7 +76,7 @@ export class SessionManager {
                     updatedAt: fileInfo.mtime,
                     goal: parsed.blackboard?.currentGoal || '(no goal)',
                     title: parsed.title || '',
-                    messageCount: parsed.history?.length || 0,
+                    messageCount,
                 });
             } catch {
                 // Skip corrupted files

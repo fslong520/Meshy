@@ -28,14 +28,37 @@ export interface ReplayStep {
 }
 
 // ─── Replay 完整导出 ───
+export interface ReplayMetrics {
+    messageCountByRole: {
+        system: number;
+        user: number;
+        assistant: number;
+        tool: number;
+    };
+    textMessages: number;
+    toolCalls: number;
+    toolResults: number;
+    totalTextCharacters: number;
+    uniqueTools: string[];
+}
+
 export interface ReplayExport {
     sessionId: string;
     exportedAt: string;
     totalSteps: number;
     steps: ReplayStep[];
+    metrics: ReplayMetrics;
     blackboard: {
         currentGoal: string;
         tasks: Array<{ id: string; description: string; status: string }>;
+        openFiles: string[];
+        lastError: string | null;
+    };
+    session: {
+        title?: string;
+        status: string;
+        activeAgentId: string;
+        messageCount: number;
     };
 }
 
@@ -46,12 +69,14 @@ export function exportReplay(session: Session): ReplayExport {
     const steps: ReplayStep[] = session.history.map((msg, idx) => {
         return messageToStep(msg, idx);
     });
+    const metrics = computeReplayMetrics(session, steps);
 
     return {
         sessionId: session.id,
         exportedAt: new Date().toISOString(),
         totalSteps: steps.length,
         steps,
+        metrics,
         blackboard: {
             currentGoal: session.blackboard.currentGoal,
             tasks: session.blackboard.tasks.map(t => ({
@@ -59,8 +84,57 @@ export function exportReplay(session: Session): ReplayExport {
                 description: t.description,
                 status: t.status,
             })),
+            openFiles: session.blackboard.openFiles,
+            lastError: session.blackboard.lastError,
+        },
+        session: {
+            title: session.title,
+            status: session.status,
+            activeAgentId: session.activeAgentId,
+            messageCount: session.history.length,
         },
     };
+}
+
+function computeReplayMetrics(session: Session, steps: ReplayStep[]): ReplayMetrics {
+    const metrics: ReplayMetrics = {
+        messageCountByRole: {
+            system: 0,
+            user: 0,
+            assistant: 0,
+            tool: 0,
+        },
+        textMessages: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        totalTextCharacters: 0,
+        uniqueTools: [],
+    };
+    const uniqueTools = new Set<string>();
+
+    for (const [index, step] of steps.entries()) {
+        metrics.messageCountByRole[step.role]++;
+
+        if (step.type === 'text') {
+            metrics.textMessages++;
+            if (typeof session.history[index]?.content === 'string') {
+                metrics.totalTextCharacters += session.history[index].content.length;
+            } else {
+                metrics.totalTextCharacters += step.summary.length;
+            }
+        } else if (step.type === 'tool_call') {
+            metrics.toolCalls++;
+            const content = session.history[index]?.content;
+            if (typeof content !== 'string' && content && content.type === 'tool_call' && content.name) {
+                uniqueTools.add(content.name);
+            }
+        } else if (step.type === 'tool_result') {
+            metrics.toolResults++;
+        }
+    }
+
+    metrics.uniqueTools = Array.from(uniqueTools).sort();
+    return metrics;
 }
 
 /** 将单条消息转为 ReplayStep */
@@ -161,6 +235,8 @@ export function formatReplayText(replay: ReplayExport): string {
         `Session Replay: ${replay.sessionId}`,
         `Exported: ${replay.exportedAt}`,
         `Total Steps: ${replay.totalSteps}`,
+        `Session Status: ${replay.session.status}`,
+        `Active Agent: ${replay.session.activeAgentId}`,
         `Goal: ${replay.blackboard.currentGoal || '(none)'}`,
         '',
         '─'.repeat(60),
