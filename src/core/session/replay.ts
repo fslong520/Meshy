@@ -221,29 +221,61 @@ export function saveReplay(
 export function loadReplay(filePath: string): ReplayExport | null {
     try {
         const raw = fs.readFileSync(filePath, 'utf8');
-        return JSON.parse(raw) as ReplayExport;
+        return normalizeReplay(JSON.parse(raw));
     } catch {
         return null;
     }
+}
+
+function normalizeReplay(value: any): ReplayExport {
+    const steps = Array.isArray(value.steps) ? value.steps : [];
+
+    return {
+        sessionId: value.sessionId,
+        exportedAt: value.exportedAt,
+        totalSteps: value.totalSteps ?? steps.length,
+        steps,
+        metrics: value.metrics ?? {
+            messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+            textMessages: 0,
+            toolCalls: 0,
+            toolResults: 0,
+            totalTextCharacters: 0,
+            uniqueTools: [],
+        },
+        blackboard: {
+            currentGoal: value.blackboard?.currentGoal ?? '',
+            tasks: Array.isArray(value.blackboard?.tasks) ? value.blackboard.tasks : [],
+            openFiles: Array.isArray(value.blackboard?.openFiles) ? value.blackboard.openFiles : [],
+            lastError: value.blackboard?.lastError ?? null,
+        },
+        session: {
+            title: value.session?.title,
+            status: value.session?.status ?? 'active',
+            activeAgentId: value.session?.activeAgentId ?? 'default',
+            messageCount: value.session?.messageCount ?? steps.length,
+        },
+    };
 }
 
 /**
  * 格式化 Replay 为可读的文本输出（用于 CLI 展示）
  */
 export function formatReplayText(replay: ReplayExport): string {
+    const normalized = normalizeReplay(replay);
     const lines: string[] = [
-        `Session Replay: ${replay.sessionId}`,
-        `Exported: ${replay.exportedAt}`,
-        `Total Steps: ${replay.totalSteps}`,
-        `Session Status: ${replay.session.status}`,
-        `Active Agent: ${replay.session.activeAgentId}`,
-        `Goal: ${replay.blackboard.currentGoal || '(none)'}`,
+        `Session Replay: ${normalized.sessionId}`,
+        `Exported: ${normalized.exportedAt}`,
+        `Total Steps: ${normalized.totalSteps}`,
+        `Session Status: ${normalized.session.status}`,
+        `Active Agent: ${normalized.session.activeAgentId}`,
+        `Goal: ${normalized.blackboard.currentGoal || '(none)'}`,
         '',
         'Replay Metrics:',
-        `  Text Messages: ${replay.metrics.textMessages}`,
-        `  Tool Calls: ${replay.metrics.toolCalls}`,
-        `  Tool Results: ${replay.metrics.toolResults}`,
-        `  Unique Tools: ${replay.metrics.uniqueTools.length > 0 ? replay.metrics.uniqueTools.join(', ') : '(none)'}`,
+        `  Text Messages: ${normalized.metrics.textMessages}`,
+        `  Tool Calls: ${normalized.metrics.toolCalls}`,
+        `  Tool Results: ${normalized.metrics.toolResults}`,
+        `  Unique Tools: ${normalized.metrics.uniqueTools.length > 0 ? normalized.metrics.uniqueTools.join(', ') : '(none)'}`,
         '',
         '─'.repeat(60),
     ];
