@@ -239,6 +239,12 @@ export function formatReplayText(replay: ReplayExport): string {
         `Active Agent: ${replay.session.activeAgentId}`,
         `Goal: ${replay.blackboard.currentGoal || '(none)'}`,
         '',
+        'Replay Metrics:',
+        `  Text Messages: ${replay.metrics.textMessages}`,
+        `  Tool Calls: ${replay.metrics.toolCalls}`,
+        `  Tool Results: ${replay.metrics.toolResults}`,
+        `  Unique Tools: ${replay.metrics.uniqueTools.length > 0 ? replay.metrics.uniqueTools.join(', ') : '(none)'}`,
+        '',
         '─'.repeat(60),
     ];
 
