@@ -17,50 +17,45 @@ The implementation should be phased to avoid high-blast-radius refactors while s
 
 ---
 
-## 1. Server naming and product boundary
+## 1. Server command naming
 
 ### Decision
 
-Externally, Meshy should converge on `server` instead of `daemon`.
+Rename the user-facing command that starts the current webserver-style daemon flow from `daemon` to `server`.
 
-Internally, `daemon` may remain temporarily as an implementation term during migration. The first step is terminology convergence, not large-scale file or import renaming.
+This is a command-level product naming change, not a broad architectural redefinition of the entire runtime surface.
 
 ### Why
 
-`server` is a clearer product term for users, integrations, and future UI surfaces. `daemon` describes a process shape, while `server` describes the product runtime surface more naturally.
+The current startup flow behaves like the `server` command in products such as OpenCode: it starts a webserver-oriented process and exposes a product-facing service entrypoint. Calling that command `server` is clearer than calling it `daemon`.
 
-### Product boundary
+### Scope
 
-`server` should become the unified product shell for three capability families:
+In scope for v1:
+- rename the user-facing startup command from `daemon` to `server`
+- update command help text, docs, and product-facing references tied to that startup path
+- keep compatibility for existing `daemon` usage during transition if needed
 
-1. runtime execution
-   - session lifecycle
-   - tool invocation
-   - provider orchestration
-2. harness
-   - replay
-   - fixture recording
-   - evaluation
-   - failure attribution
-3. plugins / presets
-   - plugin discovery
-   - preset activation
-   - capability expansion
+Out of scope for v1:
+- repo-wide renaming of all internal `daemon` identifiers
+- immediate directory moves or import path churn
+- reframing every runtime subsystem under a new `server` abstraction
 
 ### Migration strategy
 
 #### Phase A
-- use `server` in new docs, API descriptions, adapter names, and product-facing language
-- keep `daemon` operationally compatible
+- add or switch to the `server` command for the webserver startup path
+- update docs and user-facing command descriptions
+- keep `daemon` as a compatibility alias if migration cost is low
 
 #### Phase B
-- gradually migrate internal adapter/facade naming
-- later consider physical directory renames only after product boundaries stabilize
+- gradually clean up related naming in adjacent adapters or docs where it directly improves clarity
+- defer broad internal renames unless they become necessary during later refactors
 
 ### Non-goals for this phase
 - no repo-wide rename of `daemon`
 - no high-risk import churn
-- no behavior changes solely for naming cleanup
+- no behavior changes outside the startup command surface
 
 ---
 
@@ -228,6 +223,8 @@ interface HarnessRunResult {
 }
 ```
 
+`HarnessRunResult.reportId` is populated whenever a `HarnessReport` artifact is persisted. In v1, report persistence is required for both passed and failed runs so server callers can always resolve a stable report artifact after evaluation.
+
 ### Artifact persistence contract
 
 All harness artifacts are JSON files under `.meshy/harness/`.
@@ -267,6 +264,7 @@ interface HarnessArtifactStore {
   saveRun(run: HarnessRunRecord): Promise<string>;
   loadRun(id: string): Promise<HarnessRunRecord | null>;
   saveReport(report: HarnessReport): Promise<string>;
+  loadReport(id: string): Promise<HarnessReport | null>;
 }
 ```
 
@@ -360,6 +358,8 @@ Preset ownership in v1 is plugin-local:
 #### `src/core/plugins/manifest.ts`
 Owns plugin manifest schema.
 
+V1 plugins are declarative metadata only and cannot execute arbitrary third-party code.
+
 ```ts
 interface MeshyPluginManifest {
   id: string;
@@ -408,6 +408,7 @@ Responsibilities:
 
 V1 activation semantics:
 - active preset state is maintained in the server process memory
+- activation state is ephemeral and scoped to the current server process; restart clears enabled presets unless a later phase adds persistence
 - enabling a preset adds its declared capabilities into the active capability set
 - disabling a preset removes only that preset's contributed capabilities, then recomputes the merged active set from remaining enabled presets
 - duplicate capabilities from multiple presets are deduplicated by identifier
