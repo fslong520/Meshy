@@ -24,6 +24,7 @@ interface ParsedArgs {
  * 解析 CLI 参数，支持以下格式：
  *
  * meshy server [--port 9120]               → 启动 Web Dashboard
+ * meshy daemon [--port 9120]               → 启动 Web Dashboard（兼容别名）
  * meshy -p "prompt" [-m model]             → 一次性执行
  * meshy --print "prompt" [-m model]        → 一次性执行（别名）
  * meshy run "prompt" [-m model]            → 一次性执行（OpenCode 风格）
@@ -31,7 +32,7 @@ interface ParsedArgs {
  * meshy "prompt"                           → 一次性执行（简写）
  * meshy                                    → 交互式 REPL（未来）
  */
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
     const args = argv.slice(2); // 跳过 node + 脚本路径
 
     const result: ParsedArgs = {
@@ -46,7 +47,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     // 快速检查第一个非 flag 参数是否为子命令
     const firstArg = args[0];
 
-    if (firstArg === 'server') {
+    if (firstArg === 'server' || firstArg === 'daemon') {
         result.subcommand = 'server';
         // 解析 server 专用参数
         const portIdx = args.indexOf('--port');
