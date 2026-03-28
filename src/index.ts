@@ -11,6 +11,8 @@ import { PluginLoader } from './core/plugins/loader.js';
 import { PluginRegistry } from './core/plugins/registry.js';
 import { ServerPluginAdapter } from './core/server/plugins/adapter.js';
 import { saveProjectedMcpConfig } from './core/plugins/runtime/mcp-persistence.js';
+import { rankSkills } from './core/skills/retrieval.js';
+import { deriveSkillRetrievalBias } from './core/plugins/runtime/skill-bias.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -314,6 +316,22 @@ export function registerServerRuntimeHandlers(
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }
     });
+}
+
+export function searchSkillsWithBias(
+    query: string,
+    registry: { listSkills(): any[] },
+    pluginAdapter: { getActiveCapabilities(): unknown },
+) {
+    const skills = registry.listSkills();
+    const bias = deriveSkillRetrievalBias({
+        activeCapabilities: pluginAdapter.getActiveCapabilities() as any,
+    });
+    return rankSkills({
+        query,
+        skills,
+        bias,
+    }).map(entry => entry.skill);
 }
 
 export async function runServer(port: number) {
@@ -761,8 +779,11 @@ export async function runServer(port: number) {
 
     daemon.on('skill:search', async (params: any, ws, msgId) => {
         try {
-            await activeWorkspace.memoryStore.initialize();
-            const skills = await activeWorkspace.memoryStore.searchSkills(params.query || '');
+            const skills = searchSkillsWithBias(
+                params.query || '',
+                engine.getSkillRegistry(),
+                pluginAdapter,
+            );
             daemon.sendResponse(ws, msgId, { skills });
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { skills: [], error: err.message });
