@@ -542,6 +542,11 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'plugin:mcp:save': {
+                this.emit('plugin:mcp:save', msg.params, ws, msg.id);
+                break;
+            }
+
             default:
                 this.sendTo(ws, {
                     id: msg.id,

@@ -10,6 +10,7 @@ import { HarnessServerAdapter } from './core/server/harness/adapter.js';
 import { PluginLoader } from './core/plugins/loader.js';
 import { PluginRegistry } from './core/plugins/registry.js';
 import { ServerPluginAdapter } from './core/server/plugins/adapter.js';
+import { saveProjectedMcpConfig } from './core/plugins/runtime/mcp-persistence.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -227,9 +228,11 @@ export function registerServerRuntimeHandlers(
     plugins: {
         listPlugins: () => unknown;
         listPresets: () => unknown;
-        enablePreset: (id: string) => void;
-        disablePreset: (id: string) => void;
+        enablePreset: (id: string) => Promise<unknown>;
+        disablePreset: (id: string) => Promise<unknown>;
         getActiveCapabilities: () => unknown;
+        getActiveMcpProjection: () => unknown;
+        saveMcpProjection: (workspaceRoot: string) => Promise<unknown>;
     },
 ): void {
     daemon.on('harness:fixture:create', async (params: any, ws: any, msgId: string) => {
@@ -278,26 +281,38 @@ export function registerServerRuntimeHandlers(
         daemon.sendResponse(ws, msgId, { presets: plugins.listPresets() });
     });
 
-    daemon.on('plugin:preset:enable', (params: any, ws: any, msgId: string) => {
+    daemon.on('plugin:preset:enable', async (params: any, ws: any, msgId: string) => {
         try {
-            plugins.enablePreset(params?.id as string);
-            daemon.sendResponse(ws, msgId, { success: true, capabilities: plugins.getActiveCapabilities() });
+            const result = await plugins.enablePreset(params?.id as string) as Record<string, unknown>;
+            daemon.sendResponse(ws, msgId, { success: true, ...result });
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }
     });
 
-    daemon.on('plugin:preset:disable', (params: any, ws: any, msgId: string) => {
+    daemon.on('plugin:preset:disable', async (params: any, ws: any, msgId: string) => {
         try {
-            plugins.disablePreset(params?.id as string);
-            daemon.sendResponse(ws, msgId, { success: true, capabilities: plugins.getActiveCapabilities() });
+            const result = await plugins.disablePreset(params?.id as string) as Record<string, unknown>;
+            daemon.sendResponse(ws, msgId, { success: true, ...result });
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }
     });
 
     daemon.on('plugin:capabilities:get', (ws: any, msgId: string) => {
-        daemon.sendResponse(ws, msgId, { capabilities: plugins.getActiveCapabilities() });
+        daemon.sendResponse(ws, msgId, {
+            capabilities: plugins.getActiveCapabilities(),
+            projection: plugins.getActiveMcpProjection(),
+        });
+    });
+
+    daemon.on('plugin:mcp:save', async (params: any, ws: any, msgId: string) => {
+        try {
+            const result = await plugins.saveMcpProjection(params?.workspaceRoot as string) as Record<string, unknown>;
+            daemon.sendResponse(ws, msgId, { success: true, ...result });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
     });
 }
 
@@ -334,7 +349,11 @@ export async function runServer(port: number) {
     const pluginRoot = path.join(activeWorkspace.rootPath, '.meshy', 'plugins');
     const pluginLoader = new PluginLoader([pluginRoot]);
     const pluginRegistry = new PluginRegistry(pluginLoader.loadAll());
-    const pluginAdapter = new ServerPluginAdapter(pluginRegistry);
+    const pluginAdapter = new ServerPluginAdapter(
+        pluginRegistry,
+        activeWorkspace.mcpHost,
+        saveProjectedMcpConfig,
+    );
     registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter);
 
     // Cache skills in memory on startup
