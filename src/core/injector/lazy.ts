@@ -20,11 +20,14 @@ import { Session } from '../session/state.js';
 import { ToolRegistry } from '../tool/registry.js';
 import { ToolPackRegistry } from '../tool/tool-pack.js';
 import { ProviderResolver } from '../llm/resolver.js';
+import { rankSkills } from '../skills/retrieval.js';
+import { deriveSkillRetrievalBias } from '../plugins/runtime/skill-bias.js';
 import fs from 'fs';
 import path from 'path';
 
 /** ToolRAG Top-K 默认值 */
 const DEFAULT_RAG_TOP_K = 8;
+const MAX_SKILL_RETRIEVAL_HITS = 5;
 
 export interface InjectionResult {
     /** 组装后的完整 System Prompt */
@@ -93,8 +96,21 @@ export class LazyInjector {
         for (const s of parsed.skills) {
             skillNames.add(s.value);
         }
-        const searchHits = this.skillRegistry.searchByKeywords(parsed.cleanText);
-        for (const hit of searchHits) {
+        const rankedCandidateSkills = this.skillRegistry.listSkills();
+        const bias = deriveSkillRetrievalBias({
+            activeCapabilities: {
+                skills: decision.suggestedSkills,
+            },
+        });
+        const rankedSkillHits = rankSkills({
+            query: parsed.cleanText,
+            skills: rankedCandidateSkills,
+            bias,
+        })
+            .map(entry => entry.skill)
+            .filter(skill => !skillNames.has(skill.name))
+            .slice(0, MAX_SKILL_RETRIEVAL_HITS);
+        for (const hit of rankedSkillHits) {
             skillNames.add(hit.name);
         }
 
