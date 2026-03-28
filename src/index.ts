@@ -6,6 +6,10 @@ import { WorkspaceManager } from './core/workspace/manager.js';
 import { SessionManager } from './core/session/manager.js';
 import { exportReplay, loadReplay } from './core/session/replay.js';
 import { terminalManager } from './core/terminal/manager.js';
+import { HarnessServerAdapter } from './core/server/harness/adapter.js';
+import { PluginLoader } from './core/plugins/loader.js';
+import { PluginRegistry } from './core/plugins/registry.js';
+import { ServerPluginAdapter } from './core/server/plugins/adapter.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -209,6 +213,94 @@ export async function runMeshy(prompt: string, options?: { model?: string | null
     process.exit(0);
 }
 
+export function registerServerRuntimeHandlers(
+    daemon: {
+        on: (event: string, handler: (...args: any[]) => void) => void;
+        sendResponse: (ws: any, id: string | undefined, result: unknown) => void;
+    },
+    harness: {
+        createFixtureFromReplay: (replayPath: string, options?: Record<string, unknown>) => Promise<{ fixtureId: string }>;
+        runFixture: (fixtureId: string) => Promise<unknown>;
+        getRun: (runId: string) => Promise<unknown>;
+        getReport: (reportId: string) => Promise<unknown>;
+    },
+    plugins: {
+        listPlugins: () => unknown;
+        listPresets: () => unknown;
+        enablePreset: (id: string) => void;
+        disablePreset: (id: string) => void;
+        getActiveCapabilities: () => unknown;
+    },
+): void {
+    daemon.on('harness:fixture:create', async (params: any, ws: any, msgId: string) => {
+        try {
+            const replayPath = params?.replayPath as string;
+            const options = (params?.options ?? {}) as Record<string, unknown>;
+            const result = await harness.createFixtureFromReplay(replayPath, options);
+            daemon.sendResponse(ws, msgId, result);
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('harness:fixture:run', async (params: any, ws: any, msgId: string) => {
+        try {
+            const result = await harness.runFixture(params?.fixtureId as string);
+            daemon.sendResponse(ws, msgId, result);
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('harness:run:get', async (params: any, ws: any, msgId: string) => {
+        try {
+            const result = await harness.getRun(params?.runId as string);
+            daemon.sendResponse(ws, msgId, result);
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('harness:report:get', async (params: any, ws: any, msgId: string) => {
+        try {
+            const result = await harness.getReport(params?.reportId as string);
+            daemon.sendResponse(ws, msgId, result);
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('plugin:list', (ws: any, msgId: string) => {
+        daemon.sendResponse(ws, msgId, { plugins: plugins.listPlugins() });
+    });
+
+    daemon.on('plugin:preset:list', (ws: any, msgId: string) => {
+        daemon.sendResponse(ws, msgId, { presets: plugins.listPresets() });
+    });
+
+    daemon.on('plugin:preset:enable', (params: any, ws: any, msgId: string) => {
+        try {
+            plugins.enablePreset(params?.id as string);
+            daemon.sendResponse(ws, msgId, { success: true, capabilities: plugins.getActiveCapabilities() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('plugin:preset:disable', (params: any, ws: any, msgId: string) => {
+        try {
+            plugins.disablePreset(params?.id as string);
+            daemon.sendResponse(ws, msgId, { success: true, capabilities: plugins.getActiveCapabilities() });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('plugin:capabilities:get', (ws: any, msgId: string) => {
+        daemon.sendResponse(ws, msgId, { capabilities: plugins.getActiveCapabilities() });
+    });
+}
+
 export async function runServer(port: number) {
     const config = loadConfig();
     const providerNames = Object.keys(config.providers);
@@ -237,6 +329,13 @@ export async function runServer(port: number) {
         maxRetries: config.system.maxRetries,
         daemon,
     });
+
+    const harnessAdapter = new HarnessServerAdapter(activeWorkspace.rootPath);
+    const pluginRoot = path.join(activeWorkspace.rootPath, '.meshy', 'plugins');
+    const pluginLoader = new PluginLoader([pluginRoot]);
+    const pluginRegistry = new PluginRegistry(pluginLoader.loadAll());
+    const pluginAdapter = new ServerPluginAdapter(pluginRegistry);
+    registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter);
 
     // Cache skills in memory on startup
     engine.getSkillRegistry().scan(activeWorkspace.rootPath);

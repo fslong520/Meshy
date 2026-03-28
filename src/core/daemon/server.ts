@@ -497,6 +497,51 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'harness:fixture:create': {
+                this.emit('harness:fixture:create', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'harness:fixture:run': {
+                this.emit('harness:fixture:run', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'harness:run:get': {
+                this.emit('harness:run:get', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'harness:report:get': {
+                this.emit('harness:report:get', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'plugin:list': {
+                this.emit('plugin:list', ws, msg.id);
+                break;
+            }
+
+            case 'plugin:preset:list': {
+                this.emit('plugin:preset:list', ws, msg.id);
+                break;
+            }
+
+            case 'plugin:preset:enable': {
+                this.emit('plugin:preset:enable', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'plugin:preset:disable': {
+                this.emit('plugin:preset:disable', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'plugin:capabilities:get': {
+                this.emit('plugin:capabilities:get', ws, msg.id);
+                break;
+            }
+
             default:
                 this.sendTo(ws, {
                     id: msg.id,
