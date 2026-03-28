@@ -84,6 +84,7 @@ export class McpHostRuntime {
     private servers: Map<string, McpServerInstance> = new Map();
     private requestId = 0;
     private workspaceRoot: string;
+    private runtimeAllowlist: Set<string> | null = null;
 
     constructor(workspaceRoot: string = process.cwd()) {
         this.workspaceRoot = workspaceRoot;
@@ -122,6 +123,22 @@ export class McpHostRuntime {
         }
     }
 
+    public applyRuntimeAllowlist(serverNames: string[]): void {
+        this.runtimeAllowlist = new Set(serverNames);
+    }
+
+    public getConfiguredServerNames(): string[] {
+        return Array.from(this.servers.keys());
+    }
+
+    public getActiveRuntimeAllowlist(): string[] {
+        return this.runtimeAllowlist ? Array.from(this.runtimeAllowlist) : [];
+    }
+
+    private isServerAllowed(name: string): boolean {
+        return this.runtimeAllowlist === null || this.runtimeAllowlist.has(name);
+    }
+
     /**
      * 获取当前加载的所有 MCP Server 提供的工具总数
      */
@@ -156,6 +173,9 @@ export class McpHostRuntime {
         const instance = this.servers.get(name);
         if (!instance) {
             throw new Error(`MCP Server "${name}" not found in config.`);
+        }
+        if (!this.isServerAllowed(name)) {
+            throw new Error(`MCP Server "${name}" is not currently allowed.`);
         }
 
         if (instance.status === 'running') return;
@@ -233,6 +253,10 @@ export class McpHostRuntime {
         const tools: StandardTool[] = [];
 
         for (const [serverName, instance] of this.servers) {
+            if (!this.isServerAllowed(serverName)) {
+                continue;
+            }
+
             // 如果此服务器已被激活并加载了全量 Schema
             if (activatedServers.has(serverName)) {
                 for (const tool of instance.tools) {
@@ -422,6 +446,9 @@ export class McpHostRuntime {
         const instance = this.servers.get(serverName);
         if (!instance) {
             throw new Error(`MCP Server "${serverName}" not found.`);
+        }
+        if (!this.isServerAllowed(serverName)) {
+            throw new Error(`MCP Server "${serverName}" is not currently allowed.`);
         }
 
         // 惰性启动：如果 Server 未运行则自动拉起
