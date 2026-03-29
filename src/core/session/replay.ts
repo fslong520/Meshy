@@ -11,7 +11,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { Session } from './state.js';
+import { RuntimeDecisionRecord, Session } from './state.js';
 import { StandardMessage, StandardToolCall, StandardToolResult } from '../llm/provider.js';
 import { getLogger } from '../logger/index.js';
 
@@ -47,6 +47,7 @@ export interface ReplayExport {
     exportedAt: string;
     totalSteps: number;
     steps: ReplayStep[];
+    runtimeDecisions: RuntimeDecisionRecord[];
     metrics: ReplayMetrics;
     blackboard: {
         currentGoal: string;
@@ -76,6 +77,7 @@ export function exportReplay(session: Session): ReplayExport {
         exportedAt: new Date().toISOString(),
         totalSteps: steps.length,
         steps,
+        runtimeDecisions: session.runtimeDecisions,
         metrics,
         blackboard: {
             currentGoal: session.blackboard.currentGoal,
@@ -235,6 +237,7 @@ function normalizeReplay(value: any): ReplayExport {
         exportedAt: value.exportedAt,
         totalSteps: value.totalSteps ?? steps.length,
         steps,
+        runtimeDecisions: Array.isArray(value.runtimeDecisions) ? value.runtimeDecisions : [],
         metrics: value.metrics ?? {
             messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
             textMessages: 0,
