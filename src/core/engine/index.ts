@@ -907,12 +907,7 @@ export class TaskEngine {
             }
         }
 
-        const injection = await this.injector.resolve(parsed, decision, basePrompt, this.session, this.providerResolver, this.workspace.rootPath);
-        if (injection.subagent) {
-            console.log(`[Injector] Subagent activated: ${injection.subagent.name}`);
-        }
-
-        await this.runLLMLoop(injection);
+        await this.runLLMLoopWithDynamicInjection(parsed, decision, basePrompt);
 
         // Execution finished successfully, history is preserved in the ongoing session.
     }
