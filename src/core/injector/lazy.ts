@@ -107,6 +107,7 @@ export class LazyInjector {
             skills: rankedCandidateSkills,
             bias,
         })
+            .filter(entry => entry.score > 0)
             .map(entry => entry.skill)
             .filter(skill => !skillNames.has(skill.name))
             .slice(0, MAX_SKILL_RETRIEVAL_HITS);
