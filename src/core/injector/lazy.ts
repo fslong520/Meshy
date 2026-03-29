@@ -36,6 +36,10 @@ export interface InjectionResult {
     tools: StandardTool[];
     /** 如果命中了 Subagent，则返回其配置 */
     subagent: SubagentConfig | null;
+    /** 本轮最终选中的技能名称 */
+    selectedSkills: string[];
+    /** 轻量选择原因摘要 */
+    reasonSummary?: string;
 }
 
 export class LazyInjector {
@@ -242,10 +246,15 @@ export class LazyInjector {
         // 实际上 LLM loop 会利用 session.activatedTools 去取 Built-in tools
         // 但为了完整性，如果这里要完全接管的话，需要合并。暂保原样。我们用白名单阻止其调用即可。
 
+        const selectedSkills = Array.from(skillNames);
+        const reasonSummary = `explicit:${parsed.skills.map(s => s.value).join(',') || '(none)'}; suggested:${decision.suggestedSkills.join(',') || '(none)'}; retrieved:${rankedSkillHits.map(s => s.name).join(',') || '(none)'}`;
+
         return {
             systemPrompt: promptParts.filter(Boolean).join('\n\n'),
             tools,
             subagent: agent,
+            selectedSkills,
+            reasonSummary,
         };
     }
 }
