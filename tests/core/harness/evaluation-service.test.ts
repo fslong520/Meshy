@@ -20,6 +20,14 @@ describe('EvaluationService', () => {
                 { index: 0, timestamp: '2026-03-18T00:00:00.000Z', role: 'assistant', type: 'tool_call', summary: 'Tool: readFile({})', raw: { type: 'tool_call', id: '1', name: 'readFile', arguments: {} } },
                 { index: 1, timestamp: '2026-03-18T00:00:01.000Z', role: 'assistant', type: 'text', summary: 'done', raw: 'done' },
             ],
+            runtimeDecisions: [
+                {
+                    loopIndex: 0,
+                    injectedSkills: ['debug-runtime'],
+                    activeMcpServers: ['filesystem'],
+                    reasonSummary: 'retrieved:debug-runtime',
+                },
+            ],
             metrics: { messageCountByRole: { system: 0, user: 0, assistant: 2, tool: 0 }, textMessages: 1, toolCalls: 1, toolResults: 0, totalTextCharacters: 4, uniqueTools: ['readFile'] },
             blackboard: { currentGoal: 'ship harness', tasks: [], openFiles: [], lastError: null },
             session: { status: 'active', activeAgentId: 'default', messageCount: 2 },
@@ -31,6 +39,15 @@ describe('EvaluationService', () => {
         expect(result.reportId).toBeTruthy();
         expect(result.scores.outputMatch).toBe(1);
         expect(await store.loadRun(result.runId)).not.toBeNull();
-        expect(await store.loadReport(result.reportId!)).not.toBeNull();
+        const report = await store.loadReport(result.reportId!);
+        expect(report).not.toBeNull();
+        expect(report?.runtimeDecisions).toEqual([
+            {
+                loopIndex: 0,
+                injectedSkills: ['debug-runtime'],
+                activeMcpServers: ['filesystem'],
+                reasonSummary: 'retrieved:debug-runtime',
+            },
+        ]);
     });
 });

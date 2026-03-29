@@ -61,6 +61,7 @@ export class EvaluationService {
             summary: passed
                 ? 'Fixture passed all configured expectations.'
                 : (run.attribution?.summary ?? 'Fixture failed its configured expectations.'),
+            runtimeDecisions: fixture.replay.runtimeDecisions ?? [],
         };
 
         await this.store.saveRun(run);

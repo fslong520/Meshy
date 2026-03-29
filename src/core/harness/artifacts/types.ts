@@ -1,3 +1,4 @@
+import type { RuntimeDecisionRecord } from '../../session/state.js';
 import type { ReplayExport } from '../../session/replay.js';
 
 export interface FixtureExpectation {
@@ -53,6 +54,7 @@ export interface HarnessReport {
     scores: HarnessScoreBreakdown;
     attribution?: FailureAttribution;
     summary: string;
+    runtimeDecisions: RuntimeDecisionRecord[];
 }
 
 export interface HarnessRunResult {
