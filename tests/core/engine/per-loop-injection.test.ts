@@ -1,0 +1,28 @@
+import { describe, expect, it, vi } from 'vitest';
+import { TaskEngine } from '../../../src/core/engine/index.js';
+
+describe('TaskEngine per-loop injection', () => {
+    it('recomputes injection before each loop iteration', async () => {
+        const engine = Object.create(TaskEngine.prototype) as TaskEngine & any;
+        engine.session = { history: [], activatedMcpServers: new Set(), pinnedTools: new Set(), ragSelectedTools: new Set() };
+        engine.providerResolver = {};
+        engine.workspace = { rootPath: process.cwd(), mcpHost: { getAllTools: () => [] } };
+        engine.logger = { engine: vi.fn(), warn: vi.fn() };
+        engine.injector = {
+            resolve: vi.fn()
+                .mockResolvedValueOnce({ systemPrompt: 'loop-1', tools: [], subagent: null })
+                .mockResolvedValueOnce({ systemPrompt: 'loop-2', tools: [], subagent: null }),
+        };
+        engine.runSingleLLMIteration = vi.fn()
+            .mockResolvedValueOnce({ continueLoop: true, nextUserPrompt: 'follow-up' })
+            .mockResolvedValueOnce({ continueLoop: false });
+
+        await engine.runLLMLoopWithDynamicInjection(
+            { cleanText: 'first prompt', skills: [], mentions: [] } as any,
+            { suggestedSkills: [] } as any,
+            'base prompt',
+        );
+
+        expect(engine.injector.resolve).toHaveBeenCalledTimes(2);
+    });
+});

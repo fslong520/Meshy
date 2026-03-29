@@ -992,6 +992,40 @@ export class TaskEngine {
     /**
      * 核心 LLM 推理循环。接收注入结果，执行多轮工具调用直至完成或重试上限。
      */
+    private async runLLMLoopWithDynamicInjection(
+        parsed: import('../router/input-parser.js').ParsedInput,
+        decision: import('../router/intent.js').RoutingDecision,
+        basePrompt: string,
+    ): Promise<void> {
+        let currentParsed = parsed;
+        let currentDecision = decision;
+
+        while (true) {
+            const injection = await this.injector.resolve(
+                currentParsed,
+                currentDecision,
+                basePrompt,
+                this.session,
+                this.providerResolver,
+                this.workspace.rootPath,
+            );
+
+            const loopResult = await this.runSingleLLMIteration(injection);
+            if (!loopResult?.continueLoop) break;
+
+            currentParsed = {
+                ...currentParsed,
+                cleanText: loopResult.nextUserPrompt || currentParsed.cleanText,
+            };
+            currentDecision = currentDecision;
+        }
+    }
+
+    private async runSingleLLMIteration(injection: import('../injector/lazy.js').InjectionResult): Promise<any> {
+        await this.runLLMLoop(injection);
+        return { continueLoop: false };
+    }
+
     private async runLLMLoop(injection: import('../injector/lazy.js').InjectionResult): Promise<void> {
         let isDone = false;
         let retries = 0;
@@ -1236,12 +1270,16 @@ export class TaskEngine {
         this.toolRegistry.register(defineTool('readFile', {
             description: 'Read file contents with line numbers. Supports pagination via startLine/maxLines.',
             parameters: z.object({
-                filePath: z.string().describe('Path to the file relative to workspace root'),
+                filePath: z.string().optional().describe('Path to the file relative to workspace root'),
+                path: z.string().optional().describe('Alias of filePath (backwards compatibility)'),
                 startLine: z.coerce.number().describe('Starting line number (1-indexed), default 1').optional(),
                 maxLines: z.coerce.number().describe('Max lines to return, default 500').optional(),
+            }).refine(data => !!data.filePath || !!data.path, {
+                message: 'filePath or path is required',
             }),
             async execute(args) {
-                const res = aci.readFile(args.filePath, args.startLine, args.maxLines);
+                const resolvedPath = args.filePath || args.path || '';
+                const res = aci.readFile(resolvedPath, args.startLine, args.maxLines);
                 daemon?.broadcast('agent:tool_result', { tool: 'readFile', result: res });
                 return { output: JSON.stringify(res) };
             },
