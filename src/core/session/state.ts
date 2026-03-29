@@ -20,6 +20,13 @@ export interface BackgroundProcessState {
     startedAt: string;
 }
 
+export interface RuntimeDecisionRecord {
+    loopIndex: number;
+    injectedSkills: string[];
+    activeMcpServers: string[];
+    reasonSummary?: string;
+}
+
 export class Session {
     public id: string;
     public title?: string;
@@ -30,6 +37,7 @@ export class Session {
     public status: SessionStatus;
     public activeAgentId: string;
     public backgroundProcesses: BackgroundProcessState[];
+    public runtimeDecisions: RuntimeDecisionRecord[];
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -61,6 +69,7 @@ export class Session {
         this.status = 'active';
         this.activeAgentId = 'default';
         this.backgroundProcesses = [];
+        this.runtimeDecisions = [];
     }
 
     public touch() {
@@ -69,6 +78,11 @@ export class Session {
 
     public addMessage(message: StandardMessage) {
         this.history.push(message);
+        this.touch();
+    }
+
+    public appendRuntimeDecision(record: RuntimeDecisionRecord): void {
+        this.runtimeDecisions.push(record);
         this.touch();
     }
 

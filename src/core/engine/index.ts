@@ -1005,6 +1005,13 @@ export class TaskEngine {
                 this.workspace.rootPath,
             );
 
+            this.session.appendRuntimeDecision({
+                loopIndex: this.session.runtimeDecisions.length,
+                injectedSkills: injection.selectedSkills ?? [],
+                activeMcpServers: Array.from(this.session.activatedMcpServers ?? []),
+                reasonSummary: injection.reasonSummary,
+            });
+
             const loopResult = await this.runSingleLLMIteration(injection);
             if (!loopResult?.continueLoop) break;
 
