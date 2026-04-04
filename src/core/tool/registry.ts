@@ -29,9 +29,12 @@ export interface ToolManifestSummary {
     retryable: number;
 }
 
+export type ToolPolicyMode = 'standard' | 'read_only';
+
 export class ToolRegistry {
     private builtinTools: Map<string, ToolDefinition> = new Map();
     private catalog: ToolCatalog;
+    private policyMode: ToolPolicyMode = 'standard';
 
     constructor(catalog?: ToolCatalog) {
         this.catalog = catalog ?? new ToolCatalog();
@@ -57,6 +60,14 @@ export class ToolRegistry {
 
     public getCatalog(): ToolCatalog {
         return this.catalog;
+    }
+
+    public setPolicyMode(mode: ToolPolicyMode): void {
+        this.policyMode = mode;
+    }
+
+    public getPolicyMode(): ToolPolicyMode {
+        return this.policyMode;
     }
 
     // ═══════════════════════════════════════════
@@ -130,6 +141,11 @@ export class ToolRegistry {
         args: Record<string, unknown>,
         ctx: ToolContext,
     ): Promise<ToolResult> {
+        const policyBlock = this.evaluatePolicy(tool);
+        if (policyBlock) {
+            return policyBlock;
+        }
+
         const timeoutMs = tool.manifest.timeoutMs;
 
         if (timeoutMs === null || timeoutMs <= 0) {
@@ -170,6 +186,26 @@ export class ToolRegistry {
                     });
                 });
         });
+    }
+
+    private evaluatePolicy(tool: ToolDefinition): ToolResult | null {
+        if (this.policyMode !== 'read_only') {
+            return null;
+        }
+
+        if (tool.manifest.permissionClass === 'read') {
+            return null;
+        }
+
+        return {
+            output: `Tool "${tool.id}" is blocked by read-only policy because it requires "${tool.manifest.permissionClass}" access.`,
+            isError: true,
+            metadata: {
+                policyMode: this.policyMode,
+                permissionClass: tool.manifest.permissionClass,
+                policy: 'manifest-read-only',
+            },
+        };
     }
 
     public has(name: string): boolean {
