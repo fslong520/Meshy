@@ -1463,7 +1463,17 @@ export class TaskEngine {
 
         if (!approval.approved) {
             const reason = approval.reason || 'User denied the action.';
-            this.daemon?.broadcast('agent:error', { id, tool: name, reason });
+            this.daemon?.broadcast('agent:error', {
+                id,
+                tool: name,
+                reason,
+                policyDecision: {
+                    decision: 'deny',
+                    mode: this.toolRegistry.getPolicyMode(),
+                    permissionClass: 'exec',
+                    reason: 'sandbox denied action',
+                },
+            });
             // Throw an error that stops the inner execution and signals the LLM loop to stop retrying immediately
             const err = new Error(`Action denied by user or sandbox: ${reason}`);
             (err as any).isSandboxRejection = true;
@@ -1500,6 +1510,15 @@ export class TaskEngine {
                     id,
                     tool: name,
                     ...policyDecision,
+                });
+            }
+
+            if (result.isError) {
+                this.daemon?.broadcast('agent:error', {
+                    id,
+                    tool: name,
+                    reason: result.output,
+                    policyDecision,
                 });
             }
 
