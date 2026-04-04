@@ -1,14 +1,17 @@
 import { StandardMessage } from '../llm/provider.js';
+import type { RuntimeTaskStatus } from '../runtime/protocol.js';
 
 export type SessionStatus = 'active' | 'suspended' | 'archived';
 
+export interface BlackboardTask {
+    id: string;
+    description: string;
+    status: RuntimeTaskStatus;
+}
+
 export interface BlockboardState {
     currentGoal: string;
-    tasks: Array<{
-        id: string;
-        description: string;
-        status: 'pending' | 'in_progress' | 'completed' | 'failed';
-    }>;
+    tasks: BlackboardTask[];
     openFiles: string[];
     lastError: string | null;
 }

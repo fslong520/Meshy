@@ -33,6 +33,7 @@ import { CompactionAgent } from '../session/compaction.js';
 import { CustomCommandRegistry } from '../commands/loader.js';
 import { RitualLoader } from '../ritual/loader.js';
 import { exportReplay, saveReplay, formatReplayText } from '../session/replay.js';
+import { SessionHealthInspector } from '../session/health-check.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -233,7 +234,6 @@ export class TaskEngine {
         this.progressTracker = new ProgressTracker(workspace.rootPath);
 
         // Phase 20: Session Health Inspector
-        const { SessionHealthInspector } = require('../session/health-check.js');
         this.healthInspector = new SessionHealthInspector(workspace.rootPath);
     }
 
@@ -978,7 +978,9 @@ export class TaskEngine {
         await this.runLLMLoop({
             systemPrompt: resumePrompt,
             tools: [], // 工具列表在 runLLMLoop 中再组装
-            subagent: null as any // 恢复暂不支持 subagent 上下文
+            subagent: null as any, // 恢复暂不支持 subagent 上下文
+            selectedSkills: [],
+            reasonSummary: 'resume-session',
         });
 
         this.workspace.snapshotManager.clearSnapshot(this.session.id);

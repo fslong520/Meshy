@@ -127,7 +127,7 @@ function computeReplayMetrics(session: Session, steps: ReplayStep[]): ReplayMetr
         } else if (step.type === 'tool_call') {
             metrics.toolCalls++;
             const content = session.history[index]?.content;
-            if (typeof content !== 'string' && content && content.type === 'tool_call' && content.name) {
+            if (isStandardToolCallContent(content)) {
                 uniqueTools.add(content.name);
             }
         } else if (step.type === 'tool_result') {
@@ -137,6 +137,14 @@ function computeReplayMetrics(session: Session, steps: ReplayStep[]): ReplayMetr
 
     metrics.uniqueTools = Array.from(uniqueTools).sort();
     return metrics;
+}
+
+function isStandardToolCallContent(content: StandardMessage['content'] | undefined): content is StandardToolCall {
+    return !!content
+        && typeof content !== 'string'
+        && !Array.isArray(content)
+        && content.type === 'tool_call'
+        && typeof content.name === 'string';
 }
 
 /** 将单条消息转为 ReplayStep */

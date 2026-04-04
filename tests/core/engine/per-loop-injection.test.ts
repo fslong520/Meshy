@@ -4,14 +4,23 @@ import { TaskEngine } from '../../../src/core/engine/index.js';
 describe('TaskEngine per-loop injection', () => {
     it('recomputes injection before each loop iteration', async () => {
         const engine = Object.create(TaskEngine.prototype) as TaskEngine & any;
-        engine.session = { history: [], activatedMcpServers: new Set(), pinnedTools: new Set(), ragSelectedTools: new Set() };
+        engine.session = {
+            history: [],
+            activatedMcpServers: new Set(),
+            pinnedTools: new Set(),
+            ragSelectedTools: new Set(),
+            runtimeDecisions: [],
+            appendRuntimeDecision: vi.fn(function (record: unknown) {
+                (this.runtimeDecisions as unknown[]).push(record);
+            }),
+        };
         engine.providerResolver = {};
         engine.workspace = { rootPath: process.cwd(), mcpHost: { getAllTools: () => [] } };
         engine.logger = { engine: vi.fn(), warn: vi.fn() };
         engine.injector = {
             resolve: vi.fn()
-                .mockResolvedValueOnce({ systemPrompt: 'loop-1', tools: [], subagent: null })
-                .mockResolvedValueOnce({ systemPrompt: 'loop-2', tools: [], subagent: null }),
+                .mockResolvedValueOnce({ systemPrompt: 'loop-1', tools: [], subagent: null, selectedSkills: [], reasonSummary: 'loop-1' })
+                .mockResolvedValueOnce({ systemPrompt: 'loop-2', tools: [], subagent: null, selectedSkills: [], reasonSummary: 'loop-2' }),
         };
         engine.runSingleLLMIteration = vi.fn()
             .mockResolvedValueOnce({ continueLoop: true, nextUserPrompt: 'follow-up' })
