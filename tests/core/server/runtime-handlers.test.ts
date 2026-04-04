@@ -24,18 +24,30 @@ describe('registerServerRuntimeHandlers', () => {
             getActiveMcpProjection: vi.fn().mockReturnValue({ mcpServers: ['filesystem'] }),
             saveMcpProjection: vi.fn().mockResolvedValue({ path: '/tmp/.agent/mcp.json', mcpServers: ['filesystem'] }),
         };
+        const tools = {
+            listManifestEntries: vi.fn().mockReturnValue([
+                { id: 'bash', source: 'builtin', manifest: { permissionClass: 'exec' } },
+                { id: 'webfetch', source: 'catalog', manifest: { permissionClass: 'network' } },
+            ]),
+        };
 
-        registerServerRuntimeHandlers(daemon as any, harness as any, plugins as any);
+        registerServerRuntimeHandlers(daemon as any, harness as any, plugins as any, tools as any);
 
         daemon.emit('harness:fixture:create', { replayPath: '/tmp/replay.json' }, {} as any, '1');
         await Promise.resolve();
         daemon.emit('plugin:list', {} as any, '2');
         daemon.emit('plugin:mcp:save', { workspaceRoot: '/tmp' }, {} as any, '3');
+        daemon.emit('tool:manifest:list', { source: 'builtin' }, {} as any, '4');
         await Promise.resolve();
 
         expect(harness.createFixtureFromReplay).toHaveBeenCalledWith('/tmp/replay.json', {});
         expect(plugins.listPlugins).toHaveBeenCalled();
         expect(plugins.saveMcpProjection).toHaveBeenCalledWith('/tmp');
+        expect(tools.listManifestEntries).toHaveBeenCalled();
         expect(daemon.sendResponse).toHaveBeenCalled();
+
+        const toolManifestReply = daemon.sendResponse.mock.calls.find(([, msgId]) => msgId === '4')?.[2] as any;
+        expect(toolManifestReply.manifests).toHaveLength(1);
+        expect(toolManifestReply.manifests[0]?.id).toBe('bash');
     });
 });

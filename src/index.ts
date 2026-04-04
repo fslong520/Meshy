@@ -13,6 +13,7 @@ import { ServerPluginAdapter } from './core/server/plugins/adapter.js';
 import { saveProjectedMcpConfig } from './core/plugins/runtime/mcp-persistence.js';
 import { rankSkills } from './core/skills/retrieval.js';
 import { deriveSkillRetrievalBias } from './core/plugins/runtime/skill-bias.js';
+import type { ToolManifestEntry } from './core/tool/registry.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -236,6 +237,9 @@ export function registerServerRuntimeHandlers(
         getActiveMcpProjection: () => unknown;
         saveMcpProjection: (workspaceRoot: string) => Promise<unknown>;
     },
+    tools?: {
+        listManifestEntries: () => ToolManifestEntry[];
+    },
 ): void {
     daemon.on('harness:fixture:create', async (params: any, ws: any, msgId: string) => {
         try {
@@ -316,6 +320,23 @@ export function registerServerRuntimeHandlers(
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }
     });
+
+    daemon.on('tool:manifest:list', (params: any, ws: any, msgId: string) => {
+        if (!tools) {
+            daemon.sendResponse(ws, msgId, { manifests: [] });
+            return;
+        }
+
+        const source = typeof params?.source === 'string' ? params.source : undefined;
+        const permissionClass = typeof params?.permissionClass === 'string' ? params.permissionClass : undefined;
+
+        const manifests = tools
+            .listManifestEntries()
+            .filter((entry) => !source || entry.source === source)
+            .filter((entry) => !permissionClass || entry.manifest.permissionClass === permissionClass);
+
+        daemon.sendResponse(ws, msgId, { manifests });
+    });
 }
 
 export function searchSkillsWithBias(
@@ -372,7 +393,9 @@ export async function runServer(port: number) {
         activeWorkspace.mcpHost,
         saveProjectedMcpConfig,
     );
-    registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter);
+    registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter, {
+        listManifestEntries: () => engine.getToolRegistry().listManifestEntries(),
+    });
 
     // Cache skills in memory on startup
     engine.getSkillRegistry().scan(activeWorkspace.rootPath);
