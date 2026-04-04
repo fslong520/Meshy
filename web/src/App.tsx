@@ -8,6 +8,7 @@ import {
   type RpcMessage,
   type PolicyDecisionEvent,
 } from './store/ws'
+import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
 import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
@@ -189,17 +190,12 @@ function App() {
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
-      const existingIndex = existingToolCalls.findIndex(tc => tc.id === data.id)
-
-      let newToolCalls
-      if (existingIndex >= 0) {
-        // 更新已有的 tool 调用参数（流式累积）
-        newToolCalls = [...existingToolCalls]
-        newToolCalls[existingIndex] = { ...newToolCalls[existingIndex], args: data.args || '' }
-      } else {
-        // 新增一个运行中的 tool 调用
-        newToolCalls = [...existingToolCalls, { id: data.id, name: data.name, args: data.args || '', status: 'running' as const }]
-      }
+      const newToolCalls = upsertToolCallById(existingToolCalls, {
+        id: data.id,
+        name: data.name,
+        args: data.args || '',
+        status: 'running',
+      })
 
       list[list.length - 1] = { ...agent, toolCalls: newToolCalls }
       return list
@@ -229,35 +225,13 @@ function App() {
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
-
-      let found = false
-      const toolCalls = existingToolCalls.map((tc) => {
-        if (tc.id === data.id) {
-          found = true
-          return {
-            ...tc,
-            result: resultText,
-            status: (isError ? 'error' : 'done') as 'error' | 'done',
-            policyDecision: data.policyDecision,
-          }
-        }
-        return tc
+      const finalToolCalls = upsertToolCallById(existingToolCalls, {
+        id: data.id,
+        name: toolName,
+        result: resultText,
+        status: (isError ? 'error' : 'done') as 'error' | 'done',
+        policyDecision: data.policyDecision,
       })
-
-      // 如果结果先于 tool_call_start 抵达，则补一条新的卡片
-      const finalToolCalls = found
-        ? toolCalls
-        : [
-            ...toolCalls,
-            {
-              id: data.id,
-              name: toolName,
-              args: '',
-              result: resultText,
-              status: (isError ? 'error' : 'done') as 'error' | 'done',
-              policyDecision: data.policyDecision,
-            } as const,
-          ]
 
       list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
       return list
@@ -282,35 +256,12 @@ function App() {
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
-
-      let matched = false
-      const toolCalls = existingToolCalls.map((tc) => {
-        const hit = (data.id ? tc.id === data.id : data.tool ? tc.name === data.tool : false) && tc.status === 'running'
-        if (hit) {
-          matched = true
-          return {
-            ...tc,
-            result: `⚠️ ${errorText}`,
-            status: 'error' as const,
-            policyDecision: data.policyDecision ?? tc.policyDecision,
-          }
-        }
-        return tc
+      const { list: finalToolCalls } = attachToolError(existingToolCalls, {
+        id: data.id,
+        tool: data.tool,
+        errorText,
+        policyDecision: data.policyDecision,
       })
-
-      const finalToolCalls = matched
-        ? toolCalls
-        : [
-            ...toolCalls,
-            {
-              id: data.id || `error-${Date.now()}`,
-              name: data.tool || 'UnknownTool',
-              args: '',
-              result: `⚠️ ${errorText}`,
-              status: 'error' as const,
-              policyDecision: data.policyDecision,
-            },
-          ]
 
       list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
       return list
@@ -351,6 +302,68 @@ function App() {
 
   useEvent('agent:policy_decision', () => {
     setPolicyDecisions(getPolicyDecisionTimeline())
+  })
+
+  useEvent('agent:policy_decision', (msg: RpcMessage) => {
+    const data = msg.data as {
+      id?: string;
+      tool?: string;
+      decision?: 'allow' | 'deny';
+      mode?: string;
+      permissionClass?: string;
+      reason?: string;
+    }
+
+    if (!data.id || !data.tool || !data.decision || !data.mode || !data.permissionClass || !data.reason) {
+      return
+    }
+
+    const decision = data.decision
+    const mode = data.mode
+    const permissionClass = data.permissionClass
+    const reason = data.reason
+    const toolName = data.tool
+    const toolCallId = data.id
+
+    setMessages((prev) => {
+      const list = [...prev]
+      let matchedIndex = -1
+
+      for (let i = list.length - 1; i >= 0; i--) {
+        const msgItem = list[i]
+        if (msgItem?.toolCalls?.some((tc) => tc.id === data.id)) {
+          matchedIndex = i
+          break
+        }
+      }
+
+      const policyDecision = {
+        decision,
+        mode,
+        permissionClass,
+        reason,
+      }
+
+      if (matchedIndex >= 0) {
+        const target = list[matchedIndex]
+        const nextCalls = upsertToolCallById(target.toolCalls || [], {
+          id: toolCallId,
+          name: toolName,
+          policyDecision,
+        })
+        list[matchedIndex] = { ...target, toolCalls: nextCalls }
+        return list
+      }
+
+      const { list: ensuredList, agent } = ensureAgentContainer(list)
+      const nextCalls = upsertToolCallById(agent.toolCalls || [], {
+        id: toolCallId,
+        name: toolName,
+        policyDecision,
+      })
+      ensuredList[ensuredList.length - 1] = { ...agent, toolCalls: nextCalls }
+      return ensuredList
+    })
   })
 
   // 发送消息
