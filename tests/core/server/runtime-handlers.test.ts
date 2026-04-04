@@ -29,6 +29,11 @@ describe('registerServerRuntimeHandlers', () => {
                 { id: 'bash', source: 'builtin', manifest: { permissionClass: 'exec' } },
                 { id: 'webfetch', source: 'catalog', manifest: { permissionClass: 'network' } },
             ]),
+            getManifest: vi.fn().mockImplementation((name: string) => (
+                name === 'bash'
+                    ? { permissionClass: 'exec', timeoutMs: 120000, concurrencySafe: true }
+                    : null
+            )),
             summarizeManifestEntries: vi.fn().mockReturnValue({
                 total: 2,
                 bySource: { builtin: 1, catalog: 1 },
@@ -45,12 +50,14 @@ describe('registerServerRuntimeHandlers', () => {
         daemon.emit('plugin:list', {} as any, '2');
         daemon.emit('plugin:mcp:save', { workspaceRoot: '/tmp' }, {} as any, '3');
         daemon.emit('tool:manifest:list', { source: 'builtin' }, {} as any, '4');
+        daemon.emit('tool:manifest:get', { name: 'bash' }, {} as any, '5');
         await Promise.resolve();
 
         expect(harness.createFixtureFromReplay).toHaveBeenCalledWith('/tmp/replay.json', {});
         expect(plugins.listPlugins).toHaveBeenCalled();
         expect(plugins.saveMcpProjection).toHaveBeenCalledWith('/tmp');
         expect(tools.listManifestEntries).toHaveBeenCalled();
+        expect(tools.getManifest).toHaveBeenCalledWith('bash');
         expect(tools.summarizeManifestEntries).toHaveBeenCalled();
         expect(daemon.sendResponse).toHaveBeenCalled();
 
@@ -58,5 +65,9 @@ describe('registerServerRuntimeHandlers', () => {
         expect(toolManifestReply.manifests).toHaveLength(1);
         expect(toolManifestReply.manifests[0]?.id).toBe('bash');
         expect(toolManifestReply.summary.total).toBe(2);
+
+        const singleManifestReply = daemon.sendResponse.mock.calls.find(([, msgId]) => msgId === '5')?.[2] as any;
+        expect(singleManifestReply.name).toBe('bash');
+        expect(singleManifestReply.manifest.permissionClass).toBe('exec');
     });
 });

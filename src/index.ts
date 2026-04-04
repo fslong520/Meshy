@@ -239,6 +239,7 @@ export function registerServerRuntimeHandlers(
     },
     tools?: {
         listManifestEntries: () => ToolManifestEntry[];
+        getManifest: (name: string) => ToolManifestEntry['manifest'] | null;
         summarizeManifestEntries: () => {
             total: number;
             bySource: { builtin: number; catalog: number };
@@ -347,6 +348,19 @@ export function registerServerRuntimeHandlers(
             summary: tools.summarizeManifestEntries(),
         });
     });
+
+    daemon.on('tool:manifest:get', (params: any, ws: any, msgId: string) => {
+        const name = typeof params?.name === 'string' ? params.name : '';
+        if (!tools || !name) {
+            daemon.sendResponse(ws, msgId, { name, manifest: null });
+            return;
+        }
+
+        daemon.sendResponse(ws, msgId, {
+            name,
+            manifest: tools.getManifest(name),
+        });
+    });
 }
 
 export function searchSkillsWithBias(
@@ -405,6 +419,7 @@ export async function runServer(port: number) {
     );
     registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter, {
         listManifestEntries: () => engine.getToolRegistry().listManifestEntries(),
+        getManifest: (name: string) => engine.getToolRegistry().getManifest(name),
         summarizeManifestEntries: () => engine.getToolRegistry().summarizeManifestEntries(),
     });
 
