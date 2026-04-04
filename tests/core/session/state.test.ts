@@ -37,4 +37,20 @@ describe('Session', () => {
         const restored = Session.deserialize(legacyJson);
         expect(restored.toolPolicyMode).toBe('standard');
     });
+
+    it('persists tool policy history entries through serialization', () => {
+        const session = new Session('policy-history-session');
+        session.toolPolicyHistory.push({
+            previousMode: 'standard',
+            nextMode: 'read_only',
+            changedAt: '2026-01-01T00:00:00.000Z',
+            source: 'runtime-api',
+        });
+
+        const serialized = session.serialize();
+        const restored = Session.deserialize(serialized);
+
+        expect(restored.toolPolicyHistory).toHaveLength(1);
+        expect(restored.toolPolicyHistory[0]?.nextMode).toBe('read_only');
+    });
 });

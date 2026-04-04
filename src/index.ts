@@ -243,6 +243,8 @@ export function registerServerRuntimeHandlers(
         getManifest: (name: string) => ToolManifestEntry['manifest'] | null;
         getPolicyMode: () => ToolPolicyMode;
         setPolicyMode: (mode: ToolPolicyMode) => void;
+        getPolicyHistory: () => Array<{ previousMode: ToolPolicyMode; nextMode: ToolPolicyMode; changedAt: string; source: string }>;
+        appendPolicyHistory: (entry: { previousMode: ToolPolicyMode; nextMode: ToolPolicyMode; changedAt: string; source: string }) => void;
         summarizeManifestEntries: () => {
             total: number;
             bySource: { builtin: number; catalog: number };
@@ -394,10 +396,31 @@ export function registerServerRuntimeHandlers(
             return;
         }
 
+        const previousMode = tools.getPolicyMode();
         tools.setPolicyMode(mode);
+        if (previousMode !== mode) {
+            tools.appendPolicyHistory({
+                previousMode,
+                nextMode: mode,
+                changedAt: new Date().toISOString(),
+                source: 'runtime-api',
+            });
+        }
+
         daemon.sendResponse(ws, msgId, {
             success: true,
             mode: tools.getPolicyMode(),
+        });
+    });
+
+    daemon.on('tool:policy:history', (ws: any, msgId: string) => {
+        if (!tools) {
+            daemon.sendResponse(ws, msgId, { entries: [] });
+            return;
+        }
+
+        daemon.sendResponse(ws, msgId, {
+            entries: tools.getPolicyHistory(),
         });
     });
 }
@@ -466,6 +489,10 @@ export async function runServer(port: number) {
         setPolicyMode: (mode) => {
             engine.getToolRegistry().setPolicyMode(mode);
             session.toolPolicyMode = mode;
+        },
+        getPolicyHistory: () => session.toolPolicyHistory,
+        appendPolicyHistory: (entry) => {
+            session.toolPolicyHistory.push(entry);
             sessionManager.saveSession(session);
         },
         summarizeManifestEntries: () => engine.getToolRegistry().summarizeManifestEntries(),

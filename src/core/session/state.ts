@@ -31,6 +31,13 @@ export interface RuntimeDecisionRecord {
     reasonSummary?: string;
 }
 
+export interface ToolPolicyHistoryEntry {
+    previousMode: ToolPolicyMode;
+    nextMode: ToolPolicyMode;
+    changedAt: string;
+    source: string;
+}
+
 export class Session {
     public id: string;
     public title?: string;
@@ -43,6 +50,7 @@ export class Session {
     public backgroundProcesses: BackgroundProcessState[];
     public runtimeDecisions: RuntimeDecisionRecord[];
     public toolPolicyMode: ToolPolicyMode;
+    public toolPolicyHistory: ToolPolicyHistoryEntry[];
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -76,6 +84,7 @@ export class Session {
         this.backgroundProcesses = [];
         this.runtimeDecisions = [];
         this.toolPolicyMode = 'standard';
+        this.toolPolicyHistory = [];
     }
 
     public touch() {
@@ -167,6 +176,7 @@ export class Session {
             activatedMcpServers: Array.from(this.activatedMcpServers),
             backgroundProcesses: this.backgroundProcesses,
             toolPolicyMode: this.toolPolicyMode,
+            toolPolicyHistory: this.toolPolicyHistory,
         };
 
         let result = JSON.stringify(baseState) + '\n';
@@ -207,6 +217,9 @@ export class Session {
                 if (parsedMeta.toolPolicyMode === 'read_only' || parsedMeta.toolPolicyMode === 'standard') {
                     session.toolPolicyMode = parsedMeta.toolPolicyMode;
                 }
+                if (Array.isArray(parsedMeta.toolPolicyHistory)) {
+                    session.toolPolicyHistory = parsedMeta.toolPolicyHistory;
+                }
                 return session;
             }
         } catch (e) {
@@ -232,6 +245,9 @@ export class Session {
         }
         if (parsedMeta.toolPolicyMode === 'read_only' || parsedMeta.toolPolicyMode === 'standard') {
             session.toolPolicyMode = parsedMeta.toolPolicyMode;
+        }
+        if (Array.isArray(parsedMeta.toolPolicyHistory)) {
+            session.toolPolicyHistory = parsedMeta.toolPolicyHistory;
         }
 
         // Replay events

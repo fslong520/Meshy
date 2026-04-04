@@ -26,6 +26,7 @@ describe('registerServerRuntimeHandlers', () => {
         };
         const tools = {
             _policyMode: 'read_only',
+            _policyHistory: [] as Array<{ previousMode: string; nextMode: string; changedAt: string; source: string }>,
             listManifestEntries: vi.fn().mockReturnValue([
                 { id: 'bash', source: 'builtin', manifest: { permissionClass: 'exec' } },
                 { id: 'webfetch', source: 'catalog', manifest: { permissionClass: 'network' } },
@@ -40,6 +41,12 @@ describe('registerServerRuntimeHandlers', () => {
             }),
             setPolicyMode: vi.fn().mockImplementation(function (mode: string) {
                 this._policyMode = mode;
+            }),
+            appendPolicyHistory: vi.fn().mockImplementation(function (entry: { previousMode: string; nextMode: string; changedAt: string; source: string }) {
+                this._policyHistory.push(entry);
+            }),
+            getPolicyHistory: vi.fn().mockImplementation(function () {
+                return this._policyHistory;
             }),
             summarizeManifestEntries: vi.fn().mockReturnValue({
                 total: 2,
@@ -60,6 +67,7 @@ describe('registerServerRuntimeHandlers', () => {
         daemon.emit('tool:manifest:get', { name: 'bash' }, {} as any, '5');
         daemon.emit('tool:policy:get', {} as any, '6');
         daemon.emit('tool:policy:set', { mode: 'standard' }, {} as any, '7');
+        daemon.emit('tool:policy:history', {} as any, '8');
         await Promise.resolve();
 
         expect(harness.createFixtureFromReplay).toHaveBeenCalledWith('/tmp/replay.json', {});
@@ -69,6 +77,8 @@ describe('registerServerRuntimeHandlers', () => {
         expect(tools.getManifest).toHaveBeenCalledWith('bash');
         expect(tools.getPolicyMode).toHaveBeenCalled();
         expect(tools.setPolicyMode).toHaveBeenCalledWith('standard');
+        expect(tools.appendPolicyHistory).toHaveBeenCalled();
+        expect(tools.getPolicyHistory).toHaveBeenCalled();
         expect(tools.summarizeManifestEntries).toHaveBeenCalled();
         expect(daemon.sendResponse).toHaveBeenCalled();
 
@@ -87,5 +97,10 @@ describe('registerServerRuntimeHandlers', () => {
 
         const policySetReply = daemon.sendResponse.mock.calls.find(([, msgId]) => msgId === '7')?.[2] as any;
         expect(policySetReply.mode).toBe('standard');
+
+        const policyHistoryReply = daemon.sendResponse.mock.calls.find(([, msgId]) => msgId === '8')?.[2] as any;
+        expect(policyHistoryReply.entries).toHaveLength(1);
+        expect(policyHistoryReply.entries[0]?.previousMode).toBe('read_only');
+        expect(policyHistoryReply.entries[0]?.nextMode).toBe('standard');
     });
 });
