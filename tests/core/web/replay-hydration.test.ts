@@ -3,7 +3,7 @@ import { hydrateReplayView } from '../../../web/src/store/replay-hydration.js';
 
 describe('replay hydration', () => {
     it('hydrates tool policy badges and timeline from replay payloads', () => {
-        const replay = {
+        const replay: Parameters<typeof hydrateReplayView>[0] = {
             sessionId: 'session-1',
             totalSteps: 2,
             steps: [
@@ -68,7 +68,7 @@ describe('replay hydration', () => {
     });
 
     it('prefers unified replay events when present', () => {
-        const replay = {
+        const replay: Parameters<typeof hydrateReplayView>[0] = {
             sessionId: 'session-2',
             totalSteps: 1,
             steps: [
@@ -82,20 +82,20 @@ describe('replay hydration', () => {
             ],
             events: [
                 {
-                    type: 'text',
+                    type: 'agent:text',
                     timestamp: '2026-04-04T00:00:00.000Z',
                     role: 'user',
                     content: 'hello from events',
                 },
                 {
-                    type: 'tool_call',
+                    type: 'agent:tool_call',
                     timestamp: '2026-04-04T00:00:01.000Z',
                     toolCallId: 'tool-call-2',
                     toolName: 'read_note',
                     argumentsText: '{"filePath":"note.md"}',
                 },
                 {
-                    type: 'tool_result',
+                    type: 'agent:tool_result',
                     timestamp: '2026-04-04T00:00:02.000Z',
                     toolCallId: 'tool-call-2',
                     toolName: 'read_note',
@@ -103,7 +103,7 @@ describe('replay hydration', () => {
                     isError: false,
                 },
                 {
-                    type: 'policy_decision',
+                    type: 'agent:policy_decision',
                     timestamp: '2026-04-04T00:00:03.000Z',
                     toolCallId: 'tool-call-2',
                     toolName: 'read_note',
@@ -138,5 +138,39 @@ describe('replay hydration', () => {
         });
         expect(hydrated.policyDecisions).toHaveLength(1);
         expect(hydrated.policyDecisions[0]?.tool).toBe('read_note');
+    });
+
+    it('supports legacy non-prefixed replay event names', () => {
+        const replay: Parameters<typeof hydrateReplayView>[0] = {
+            sessionId: 'session-legacy-events',
+            totalSteps: 0,
+            steps: [],
+            events: [
+                {
+                    type: 'text',
+                    timestamp: '2026-04-04T00:00:00.000Z',
+                    role: 'user',
+                    content: 'legacy event text',
+                },
+                {
+                    type: 'tool_call',
+                    timestamp: '2026-04-04T00:00:01.000Z',
+                    toolCallId: 'tool-call-legacy',
+                    toolName: 'read_note',
+                    argumentsText: '{}',
+                },
+            ],
+            blackboard: {
+                currentGoal: 'legacy replay compatibility',
+                tasks: [],
+            },
+            policyDecisions: [],
+        };
+
+        const hydrated = hydrateReplayView(replay);
+
+        expect(hydrated.messages).toHaveLength(2);
+        expect(hydrated.messages[0]?.content).toBe('legacy event text');
+        expect(hydrated.messages[1]?.toolCalls?.[0]?.id).toBe('tool-call-legacy');
     });
 });

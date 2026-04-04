@@ -14,20 +14,20 @@ interface ReplayExport {
   steps: ReplayStep[]
   events?: Array<
     | {
-        type: 'text'
+        type: 'agent:text' | 'text'
         timestamp: string
         role: 'user' | 'assistant' | 'system'
         content: string
       }
     | {
-        type: 'tool_call'
+        type: 'agent:tool_call' | 'tool_call'
         timestamp: string
         toolCallId: string
         toolName: string
         argumentsText: string
       }
     | {
-        type: 'tool_result'
+        type: 'agent:tool_result' | 'tool_result'
         timestamp: string
         toolCallId: string
         toolName: string
@@ -35,7 +35,7 @@ interface ReplayExport {
         isError: boolean
       }
     | {
-        type: 'policy_decision'
+        type: 'agent:policy_decision' | 'policy_decision'
         timestamp: string
         toolCallId: string
         toolName: string
@@ -60,6 +60,93 @@ interface ReplayExport {
   }>
 }
 
+type NormalizedReplayEvent =
+  | {
+      type: 'agent:text'
+      timestamp: string
+      role: 'user' | 'assistant' | 'system'
+      content: string
+    }
+  | {
+      type: 'agent:tool_call'
+      timestamp: string
+      toolCallId: string
+      toolName: string
+      argumentsText: string
+    }
+  | {
+      type: 'agent:tool_result'
+      timestamp: string
+      toolCallId: string
+      toolName: string
+      content: string
+      isError: boolean
+    }
+  | {
+      type: 'agent:policy_decision'
+      timestamp: string
+      toolCallId: string
+      toolName: string
+      decision: 'allow' | 'deny'
+      mode: string
+      permissionClass: string
+      reason: string
+    }
+
+function normalizeReplayEvents(events: ReplayExport['events']): NormalizedReplayEvent[] {
+  const normalized: NormalizedReplayEvent[] = []
+
+  for (const event of events || []) {
+    if (event.type === 'agent:text' || event.type === 'text') {
+      normalized.push({
+        type: 'agent:text',
+        timestamp: event.timestamp,
+        role: event.role,
+        content: event.content,
+      })
+      continue
+    }
+
+    if (event.type === 'agent:tool_call' || event.type === 'tool_call') {
+      normalized.push({
+        type: 'agent:tool_call',
+        timestamp: event.timestamp,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        argumentsText: event.argumentsText,
+      })
+      continue
+    }
+
+    if (event.type === 'agent:tool_result' || event.type === 'tool_result') {
+      normalized.push({
+        type: 'agent:tool_result',
+        timestamp: event.timestamp,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        content: event.content,
+        isError: event.isError,
+      })
+      continue
+    }
+
+    if (event.type === 'agent:policy_decision' || event.type === 'policy_decision') {
+      normalized.push({
+        type: 'agent:policy_decision',
+        timestamp: event.timestamp,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        decision: event.decision,
+        mode: event.mode,
+        permissionClass: event.permissionClass,
+        reason: event.reason,
+      })
+    }
+  }
+
+  return normalized
+}
+
 function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
   const messages: ChatMessage[] = []
   const policyDecisions: PolicyDecisionEvent[] = []
@@ -81,8 +168,8 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
     return last
   }
 
-  for (const event of replay.events || []) {
-    if (event.type === 'text') {
+  for (const event of normalizeReplayEvents(replay.events)) {
+    if (event.type === 'agent:text') {
       if (event.role === 'system') continue
       messages.push({
         id: `replay-event-text-${messages.length}`,
@@ -93,7 +180,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
       continue
     }
 
-    if (event.type === 'tool_call') {
+    if (event.type === 'agent:tool_call') {
       const agent = ensureAgentContext()
       agent.toolCalls!.push({
         id: event.toolCallId,
@@ -104,7 +191,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
       continue
     }
 
-    if (event.type === 'tool_result') {
+    if (event.type === 'agent:tool_result') {
       const last = messages[messages.length - 1]
       if (last?.role === 'agent' && last.toolCalls) {
         const matched = last.toolCalls.find((toolCall) => toolCall.id === event.toolCallId)
@@ -116,7 +203,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
       continue
     }
 
-    if (event.type === 'policy_decision') {
+    if (event.type === 'agent:policy_decision') {
       policyDecisions.push({
         id: event.toolCallId,
         tool: event.toolName,

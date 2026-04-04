@@ -36,23 +36,23 @@ describe('replay unified events', () => {
         const replay = exportReplay(session);
 
         expect(replay.events.map((event) => event.type)).toEqual([
-            'text',
-            'tool_call',
-            'tool_result',
-            'policy_decision',
+            'agent:text',
+            'agent:tool_call',
+            'agent:tool_result',
+            'agent:policy_decision',
         ]);
         expect(replay.events[1]).toMatchObject({
-            type: 'tool_call',
+            type: 'agent:tool_call',
             toolCallId: 'tool-call-1',
             toolName: 'write_note',
         });
         expect(replay.events[2]).toMatchObject({
-            type: 'tool_result',
+            type: 'agent:tool_result',
             toolCallId: 'tool-call-1',
             isError: true,
         });
         expect(replay.events[3]).toMatchObject({
-            type: 'policy_decision',
+            type: 'agent:policy_decision',
             toolCallId: 'tool-call-1',
             toolName: 'write_note',
             decision: 'deny',
