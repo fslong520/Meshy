@@ -1007,12 +1007,24 @@ export class TaskEngine {
                 this.workspace.rootPath,
             );
 
-            this.session.appendRuntimeDecision({
-                loopIndex: this.session.runtimeDecisions.length,
+            if (!Array.isArray((this.session as any).runtimeDecisions)) {
+                (this.session as any).runtimeDecisions = [];
+            }
+
+            const appendRuntimeDecision = (this.session as any).appendRuntimeDecision;
+            const nextLoopIndex = (this.session as any).runtimeDecisions.length;
+            const decisionRecord = {
+                loopIndex: nextLoopIndex,
                 injectedSkills: injection.selectedSkills ?? [],
                 activeMcpServers: Array.from(this.session.activatedMcpServers ?? []),
                 reasonSummary: injection.reasonSummary,
-            });
+            };
+
+            if (typeof appendRuntimeDecision === 'function') {
+                appendRuntimeDecision.call(this.session, decisionRecord);
+            } else {
+                (this.session as any).runtimeDecisions.push(decisionRecord);
+            }
 
             const loopResult = await this.runSingleLLMIteration(injection);
             if (!loopResult?.continueLoop) break;
