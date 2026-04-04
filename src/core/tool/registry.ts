@@ -84,7 +84,7 @@ export class ToolRegistry {
     ): Promise<ToolResult> {
         // 优先查找 builtin
         const builtin = this.builtinTools.get(name);
-        if (builtin) return builtin.execute(args, ctx);
+        if (builtin) return this.executeWithManifestPolicy(builtin, args, ctx);
 
         // 再查找 catalog 中已激活的工具
         const catalogTool = this.catalog.lookupDefinition(name);
@@ -93,7 +93,7 @@ export class ToolRegistry {
         if (catalogTool && isActive) {
             // 刷新 LRU 活跃度
             ctx.session?.touchTool(name);
-            return catalogTool.execute(args, ctx);
+            return this.executeWithManifestPolicy(catalogTool, args, ctx);
         }
 
         // 如果在 catalog 中但未激活，提示用户先 manageTools
@@ -105,6 +105,53 @@ export class ToolRegistry {
         }
 
         return { output: `Error: Unknown tool "${name}".`, isError: true };
+    }
+
+    private async executeWithManifestPolicy(
+        tool: ToolDefinition,
+        args: Record<string, unknown>,
+        ctx: ToolContext,
+    ): Promise<ToolResult> {
+        const timeoutMs = tool.manifest.timeoutMs;
+
+        if (timeoutMs === null || timeoutMs <= 0) {
+            return tool.execute(args, ctx);
+        }
+
+        return new Promise<ToolResult>((resolve) => {
+            let settled = false;
+
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                resolve({
+                    output: `Tool "${tool.id}" timed out after ${timeoutMs}ms.`,
+                    isError: true,
+                    metadata: {
+                        timeoutMs,
+                        policy: 'manifest-timeout',
+                    },
+                });
+            }, timeoutMs);
+
+            tool.execute(args, ctx)
+                .then((result) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve(result);
+                })
+                .catch((error: unknown) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    const message = error instanceof Error ? error.message : String(error);
+                    resolve({
+                        output: `Tool "${tool.id}" execution failed: ${message}`,
+                        isError: true,
+                    });
+                });
+        });
     }
 
     public has(name: string): boolean {
