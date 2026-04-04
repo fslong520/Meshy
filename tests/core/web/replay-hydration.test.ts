@@ -66,4 +66,77 @@ describe('replay hydration', () => {
         expect(hydrated.policyDecisions).toHaveLength(1);
         expect(hydrated.policyDecisions[0]?.permissionClass).toBe('write');
     });
+
+    it('prefers unified replay events when present', () => {
+        const replay = {
+            sessionId: 'session-2',
+            totalSteps: 1,
+            steps: [
+                {
+                    index: 0,
+                    role: 'user',
+                    type: 'text',
+                    summary: 'legacy hello',
+                    raw: 'legacy hello',
+                },
+            ],
+            events: [
+                {
+                    type: 'text',
+                    timestamp: '2026-04-04T00:00:00.000Z',
+                    role: 'user',
+                    content: 'hello from events',
+                },
+                {
+                    type: 'tool_call',
+                    timestamp: '2026-04-04T00:00:01.000Z',
+                    toolCallId: 'tool-call-2',
+                    toolName: 'read_note',
+                    argumentsText: '{"filePath":"note.md"}',
+                },
+                {
+                    type: 'tool_result',
+                    timestamp: '2026-04-04T00:00:02.000Z',
+                    toolCallId: 'tool-call-2',
+                    toolName: 'read_note',
+                    content: 'note contents',
+                    isError: false,
+                },
+                {
+                    type: 'policy_decision',
+                    timestamp: '2026-04-04T00:00:03.000Z',
+                    toolCallId: 'tool-call-2',
+                    toolName: 'read_note',
+                    decision: 'allow',
+                    mode: 'read_only',
+                    permissionClass: 'read',
+                    reason: 'allowed',
+                },
+            ],
+            blackboard: {
+                currentGoal: 'Use replay events',
+                tasks: [],
+            },
+            policyDecisions: [],
+        };
+
+        const hydrated = hydrateReplayView(replay);
+
+        expect(hydrated.messages).toHaveLength(2);
+        expect(hydrated.messages[0]?.content).toBe('hello from events');
+        expect(hydrated.messages[1]?.toolCalls?.[0]).toMatchObject({
+            id: 'tool-call-2',
+            name: 'read_note',
+            result: 'note contents',
+            status: 'done',
+            policyDecision: {
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'allowed',
+            },
+        });
+        expect(hydrated.policyDecisions).toHaveLength(1);
+        expect(hydrated.policyDecisions[0]?.tool).toBe('read_note');
+    });
 });

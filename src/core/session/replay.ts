@@ -27,6 +27,39 @@ export interface ReplayStep {
     raw: unknown;
 }
 
+export type ReplayEvent =
+    | {
+        type: 'text';
+        timestamp: string;
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+    }
+    | {
+        type: 'tool_call';
+        timestamp: string;
+        toolCallId: string;
+        toolName: string;
+        argumentsText: string;
+    }
+    | {
+        type: 'tool_result';
+        timestamp: string;
+        toolCallId: string;
+        toolName: string;
+        content: string;
+        isError: boolean;
+    }
+    | {
+        type: 'policy_decision';
+        timestamp: string;
+        toolCallId: string;
+        toolName: string;
+        decision: 'allow' | 'deny';
+        mode: string;
+        permissionClass: string;
+        reason: string;
+    };
+
 // ─── Replay 完整导出 ───
 export interface ReplayMetrics {
     messageCountByRole: {
@@ -47,6 +80,7 @@ export interface ReplayExport {
     exportedAt: string;
     totalSteps: number;
     steps: ReplayStep[];
+    events: ReplayEvent[];
     runtimeDecisions: RuntimeDecisionRecord[];
     policyDecisions: Array<{
         id: string;
@@ -117,12 +151,14 @@ export function exportReplay(session: Session): ReplayExport {
             timestamp: step.timestamp,
         }];
     });
+    const events = deriveReplayEvents(steps, policyDecisions);
 
     return {
         sessionId: session.id,
         exportedAt: new Date().toISOString(),
         totalSteps: steps.length,
         steps,
+        events,
         runtimeDecisions: session.runtimeDecisions,
         policyDecisions,
         metrics,
@@ -286,14 +322,17 @@ export function loadReplay(filePath: string): ReplayExport | null {
 
 function normalizeReplay(value: any): ReplayExport {
     const steps = Array.isArray(value.steps) ? value.steps : [];
+    const policyDecisions = Array.isArray(value.policyDecisions) ? value.policyDecisions : [];
+    const events = Array.isArray(value.events) ? value.events : deriveReplayEvents(steps, policyDecisions);
 
     return {
         sessionId: value.sessionId,
         exportedAt: value.exportedAt,
         totalSteps: value.totalSteps ?? steps.length,
         steps,
+        events,
         runtimeDecisions: Array.isArray(value.runtimeDecisions) ? value.runtimeDecisions : [],
-        policyDecisions: Array.isArray(value.policyDecisions) ? value.policyDecisions : [],
+        policyDecisions,
         metrics: value.metrics ?? {
             messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
             textMessages: 0,
@@ -315,6 +354,72 @@ function normalizeReplay(value: any): ReplayExport {
             messageCount: value.session?.messageCount ?? steps.length,
         },
     };
+}
+
+function deriveReplayEvents(
+    steps: ReplayStep[],
+    policyDecisions: ReplayExport['policyDecisions'],
+): ReplayEvent[] {
+    const toolNamesById = new Map<string, string>();
+    const events: ReplayEvent[] = [];
+
+    for (const step of steps) {
+        if (step.type === 'text') {
+            if (step.role === 'tool') {
+                continue;
+            }
+            events.push({
+                type: 'text',
+                timestamp: step.timestamp,
+                role: step.role,
+                content: typeof step.raw === 'string' ? step.raw : step.summary,
+            });
+            continue;
+        }
+
+        if (step.type === 'tool_call') {
+            const raw = step.raw as StandardToolCall;
+            const toolName = raw.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, '');
+            const toolCallId = raw.id ?? `tool-call-${step.index}`;
+            toolNamesById.set(toolCallId, toolName);
+            events.push({
+                type: 'tool_call',
+                timestamp: step.timestamp,
+                toolCallId,
+                toolName,
+                argumentsText: raw.arguments ? JSON.stringify(raw.arguments) : '',
+            });
+            continue;
+        }
+
+        if (step.type === 'tool_result') {
+            const raw = step.raw as StandardToolResult;
+            const toolCallId = raw.id ?? `tool-call-${step.index}`;
+            events.push({
+                type: 'tool_result',
+                timestamp: step.timestamp,
+                toolCallId,
+                toolName: toolNamesById.get(toolCallId) ?? 'unknown_tool',
+                content: raw.content ?? step.summary.replace(/^Result:\s*/, ''),
+                isError: Boolean(raw.isError),
+            });
+        }
+    }
+
+    for (const decision of policyDecisions) {
+        events.push({
+            type: 'policy_decision',
+            timestamp: decision.timestamp,
+            toolCallId: decision.id,
+            toolName: decision.tool,
+            decision: decision.decision,
+            mode: decision.mode,
+            permissionClass: decision.permissionClass,
+            reason: decision.reason,
+        });
+    }
+
+    return events.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
 }
 
 /**

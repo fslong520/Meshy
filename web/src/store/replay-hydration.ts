@@ -12,6 +12,39 @@ interface ReplayExport {
   sessionId: string
   totalSteps: number
   steps: ReplayStep[]
+  events?: Array<
+    | {
+        type: 'text'
+        timestamp: string
+        role: 'user' | 'assistant' | 'system'
+        content: string
+      }
+    | {
+        type: 'tool_call'
+        timestamp: string
+        toolCallId: string
+        toolName: string
+        argumentsText: string
+      }
+    | {
+        type: 'tool_result'
+        timestamp: string
+        toolCallId: string
+        toolName: string
+        content: string
+        isError: boolean
+      }
+    | {
+        type: 'policy_decision'
+        timestamp: string
+        toolCallId: string
+        toolName: string
+        decision: 'allow' | 'deny'
+        mode: string
+        permissionClass: string
+        reason: string
+      }
+  >
   blackboard: {
     currentGoal: string
     tasks: Array<{ id: string; description: string; status: string }>
@@ -25,6 +58,91 @@ interface ReplayExport {
     reason: string
     timestamp: string
   }>
+}
+
+function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
+  const messages: ChatMessage[] = []
+  const policyDecisions: PolicyDecisionEvent[] = []
+
+  const ensureAgentContext = (): ChatMessage => {
+    let last = messages[messages.length - 1]
+    if (!last || last.role !== 'agent') {
+      const agentMsg: ChatMessage = {
+        id: `replay-agent-${messages.length}`,
+        role: 'agent',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [],
+      }
+      messages.push(agentMsg)
+      last = agentMsg
+    }
+    if (!last.toolCalls) last.toolCalls = []
+    return last
+  }
+
+  for (const event of replay.events || []) {
+    if (event.type === 'text') {
+      if (event.role === 'system') continue
+      messages.push({
+        id: `replay-event-text-${messages.length}`,
+        role: event.role === 'user' ? 'user' : 'agent',
+        content: event.content,
+        timestamp: Date.parse(event.timestamp) || Date.now(),
+      })
+      continue
+    }
+
+    if (event.type === 'tool_call') {
+      const agent = ensureAgentContext()
+      agent.toolCalls!.push({
+        id: event.toolCallId,
+        name: event.toolName,
+        args: event.argumentsText,
+        status: 'done',
+      })
+      continue
+    }
+
+    if (event.type === 'tool_result') {
+      const last = messages[messages.length - 1]
+      if (last?.role === 'agent' && last.toolCalls) {
+        const matched = last.toolCalls.find((toolCall) => toolCall.id === event.toolCallId)
+        if (matched) {
+          matched.result = event.content
+          matched.status = event.isError ? 'error' : 'done'
+        }
+      }
+      continue
+    }
+
+    if (event.type === 'policy_decision') {
+      policyDecisions.push({
+        id: event.toolCallId,
+        tool: event.toolName,
+        decision: event.decision,
+        mode: event.mode,
+        permissionClass: event.permissionClass,
+        reason: event.reason,
+        timestamp: Date.parse(event.timestamp) || Date.now(),
+      })
+
+      const last = messages[messages.length - 1]
+      if (last?.role === 'agent' && last.toolCalls) {
+        const matched = last.toolCalls.find((toolCall) => toolCall.id === event.toolCallId)
+        if (matched) {
+          matched.policyDecision = {
+            decision: event.decision,
+            mode: event.mode,
+            permissionClass: event.permissionClass,
+            reason: event.reason,
+          }
+        }
+      }
+    }
+  }
+
+  return { messages, policyDecisions }
 }
 
 export function replayToMessages(replay: ReplayExport): ChatMessage[] {
@@ -104,6 +222,10 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
 }
 
 export function hydrateReplayView(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
+  if (Array.isArray(replay.events) && replay.events.length > 0) {
+    return eventReplayToMessages(replay)
+  }
+
   return {
     messages: replayToMessages(replay),
     policyDecisions: (replay.policyDecisions || []).map((event) => ({

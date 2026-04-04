@@ -36,6 +36,7 @@ describe('legacy replay compatibility', () => {
         const replay = loadReplay(filePath);
 
         expect(replay).not.toBeNull();
+        expect(replay!.events.map((event) => event.type)).toEqual(['text']);
         expect(replay!.metrics.textMessages).toBe(0);
         expect(replay!.session.status).toBe('active');
         expect(() => formatReplayText(replay!)).not.toThrow();
