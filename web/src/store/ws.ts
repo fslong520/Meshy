@@ -40,6 +40,16 @@ export interface ApprovalInfo {
     resolved: boolean;
 }
 
+export interface PolicyDecisionEvent {
+    id: string;
+    tool: string;
+    decision: 'allow' | 'deny';
+    mode: string;
+    permissionClass: string;
+    reason: string;
+    timestamp: number;
+}
+
 type EventHandler = (msg: RpcMessage) => void;
 
 // ─── 模块级状态 ───
@@ -47,6 +57,10 @@ let callIdCounter = 1;
 const eventHandlers = new Map<string, Set<EventHandler>>();
 let sseSource: EventSource | null = null;
 let sseConnected = false;
+let policyDecisionBridgeAttached = false;
+let policyDecisionBridgeUnsub: (() => void) | null = null;
+const policyDecisionTimeline: PolicyDecisionEvent[] = [];
+const POLICY_TIMELINE_LIMIT = 200;
 
 // ─── HMR 安全措施：Vite 热替换时清空所有旧 handler ───
 if (import.meta.hot) {
@@ -57,6 +71,61 @@ if (import.meta.hot) {
             sseSource.close();
             sseSource = null;
         }
+        policyDecisionBridgeUnsub?.();
+        policyDecisionBridgeUnsub = null;
+        policyDecisionBridgeAttached = false;
+        policyDecisionTimeline.length = 0;
+    });
+}
+
+function parsePolicyDecisionPayload(msg: RpcMessage): PolicyDecisionEvent | null {
+    if (msg.type !== 'event' || msg.name !== 'agent:policy_decision') return null;
+    const data = msg.data as Record<string, unknown> | undefined;
+    if (!data) return null;
+
+    const id = typeof data.id === 'string' ? data.id : '';
+    const tool = typeof data.tool === 'string' ? data.tool : '';
+    const decision = data.decision === 'allow' || data.decision === 'deny' ? data.decision : null;
+    const mode = typeof data.mode === 'string' ? data.mode : '';
+    const permissionClass = typeof data.permissionClass === 'string' ? data.permissionClass : '';
+    const reason = typeof data.reason === 'string' ? data.reason : '';
+    if (!id || !tool || !decision || !mode || !permissionClass || !reason) return null;
+
+    return {
+        id,
+        tool,
+        decision,
+        mode,
+        permissionClass,
+        reason,
+        timestamp: Date.now(),
+    };
+}
+
+export function ingestPolicyDecisionEvent(msg: RpcMessage): PolicyDecisionEvent | null {
+    const parsed = parsePolicyDecisionPayload(msg);
+    if (!parsed) return null;
+
+    policyDecisionTimeline.push(parsed);
+    if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
+        policyDecisionTimeline.splice(0, policyDecisionTimeline.length - POLICY_TIMELINE_LIMIT);
+    }
+    return parsed;
+}
+
+export function getPolicyDecisionTimeline(): PolicyDecisionEvent[] {
+    return policyDecisionTimeline.map((item) => ({ ...item }));
+}
+
+export function clearPolicyDecisionTimeline(): void {
+    policyDecisionTimeline.length = 0;
+}
+
+function ensurePolicyDecisionBridge(): void {
+    if (policyDecisionBridgeAttached) return;
+    policyDecisionBridgeAttached = true;
+    policyDecisionBridgeUnsub = onEvent('agent:policy_decision', (msg) => {
+        ingestPolicyDecisionEvent(msg);
     });
 }
 
@@ -159,6 +228,7 @@ export function useWebSocket() {
 
         const sseUrl = `${window.location.origin}/events`;
         connectSSE(sseUrl, setConnected);
+        ensurePolicyDecisionBridge();
 
         cleanupRef.current = () => {
             if (sseSource) {
