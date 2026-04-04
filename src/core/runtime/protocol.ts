@@ -1,3 +1,5 @@
+import type { AgentMessageEvent } from '../llm/provider.js';
+
 export const RUNTIME_TASK_STATUSES = [
     'pending',
     'running',
@@ -80,4 +82,44 @@ export function createRuntimeTaskId(): string {
 
 export function isTerminalRuntimeTaskStatus(status: RuntimeTaskStatus): boolean {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+export const RUNTIME_STREAM_EVENT_TYPES = [
+    'text',
+    'reasoning',
+    'tool_call_start',
+    'tool_call_delta',
+    'tool_call_end',
+    'done',
+    'error',
+] as const;
+
+export type RuntimeStreamEventType = typeof RUNTIME_STREAM_EVENT_TYPES[number];
+
+export interface RuntimeStreamEvent {
+    type: RuntimeStreamEventType;
+    data?: unknown;
+    replace?: boolean;
+    runtimeEventType?: RuntimeEventType;
+}
+
+export function normalizeAgentMessageEvent(event: AgentMessageEvent): RuntimeStreamEvent {
+    switch (event.type) {
+        case 'text':
+            return { type: 'text', data: event.data, replace: event.replace };
+        case 'reasoning_chunk':
+            return { type: 'reasoning', data: event.data };
+        case 'tool_call_start':
+            return { type: 'tool_call_start', data: event.data, runtimeEventType: 'tool_call' };
+        case 'tool_call_chunk':
+            return { type: 'tool_call_delta', data: event.data, runtimeEventType: 'tool_call' };
+        case 'tool_call_end':
+            return { type: 'tool_call_end', runtimeEventType: 'tool_call' };
+        case 'done':
+            return { type: 'done', runtimeEventType: 'background_completion' };
+        case 'error':
+            return { type: 'error', data: event.data, runtimeEventType: 'interrupt' };
+        default:
+            return { type: 'error', data: `Unknown agent message event: ${(event as AgentMessageEvent).type}` };
+    }
 }

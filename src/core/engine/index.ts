@@ -34,6 +34,7 @@ import { CustomCommandRegistry } from '../commands/loader.js';
 import { RitualLoader } from '../ritual/loader.js';
 import { exportReplay, saveReplay, formatReplayText } from '../session/replay.js';
 import { SessionHealthInspector } from '../session/health-check.js';
+import { normalizeAgentMessageEvent } from '../runtime/protocol.js';
 
 export interface EngineOptions {
     maxRetries?: number;
@@ -1098,6 +1099,8 @@ export class TaskEngine {
                     this.abortController = new AbortController();
 
                     await activeLLM.generateResponseStream(prompt, (event) => {
+                        const normalizedEvent = normalizeAgentMessageEvent(event);
+
                         if (event.type === 'text') {
                             if (event.replace) {
                                 fullResponseText = event.data;
@@ -1106,19 +1109,39 @@ export class TaskEngine {
                                 fullResponseText += event.data;
                                 process.stdout.write(event.data);
                             }
-                            this.daemon?.broadcast('agent:text', { text: event.data, id: responseMsgId, replace: event.replace });
+                            this.daemon?.broadcast('agent:text', {
+                                text: event.data,
+                                id: responseMsgId,
+                                replace: event.replace,
+                                stream: normalizedEvent,
+                            });
+                        } else if (event.type === 'reasoning_chunk') {
+                            this.daemon?.broadcast('agent:text', {
+                                reasoning: event.data,
+                                id: responseMsgId,
+                                stream: normalizedEvent,
+                            });
                         } else if (event.type === 'tool_call_start') {
                             const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };
                             pendingToolCalls.push(newCall);
                             process.stdout.write(`\n[Agent]: Calling tool "${newCall.name}"...\n`);
                             this.logger.tool(`Tool call started: ${newCall.name}`, { id: newCall.id });
-                            this.daemon?.broadcast('agent:tool_call', { id: newCall.id, name: newCall.name });
+                            this.daemon?.broadcast('agent:tool_call', {
+                                id: newCall.id,
+                                name: newCall.name,
+                                stream: normalizedEvent,
+                            });
                         } else if (event.type === 'tool_call_chunk') {
                             if (pendingToolCalls.length > 0) {
                                 const pendingObj = pendingToolCalls[pendingToolCalls.length - 1];
                                 pendingObj.rawArgs += event.data;
                                 // Optionally broadcast the accumulated args to the frontend for streaming
-                                this.daemon?.broadcast('agent:tool_call', { id: pendingObj.id, name: pendingObj.name, args: pendingObj.rawArgs });
+                                this.daemon?.broadcast('agent:tool_call', {
+                                    id: pendingObj.id,
+                                    name: pendingObj.name,
+                                    args: pendingObj.rawArgs,
+                                    stream: normalizedEvent,
+                                });
                             }
                         } else if (event.type === 'done') {
                             isDone = true;
