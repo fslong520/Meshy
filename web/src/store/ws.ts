@@ -31,6 +31,12 @@ export interface ToolCallInfo {
     result?: string;
     status: 'running' | 'done' | 'error';
     approvalReason?: string;
+    policyDecision?: {
+        decision: 'allow' | 'deny';
+        mode: string;
+        permissionClass: string;
+        reason: string;
+    };
 }
 
 export interface ApprovalInfo {

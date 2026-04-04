@@ -982,6 +982,39 @@ option {
   overflow: hidden;
 }
 
+.tool-policy-badge {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tool-policy-badge--allow {
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.tool-policy-badge--deny {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.tool-policy-badge__title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tool-policy-badge__reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
 .policy-decision-panel {
   padding: 14px 12px 12px;
   border-bottom: 1px solid var(--border);

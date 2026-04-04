@@ -208,7 +208,24 @@ function App() {
 
   // Tool Call 结果
   useEvent('agent:tool_result', (msg: RpcMessage) => {
-    const data = msg.data as { id: string; name: string; result: string; isError?: boolean }
+    const data = msg.data as {
+      id: string;
+      name?: string;
+      tool?: string;
+      result?: string;
+      isError?: boolean;
+      success?: boolean;
+      policyDecision?: {
+        decision: 'allow' | 'deny';
+        mode: string;
+        permissionClass: string;
+        reason: string;
+      };
+    }
+    const toolName = data.name || data.tool || 'unknown_tool'
+    const isError = data.isError ?? (data.success === false)
+    const resultText = data.result ?? (isError ? 'Tool execution failed.' : 'Tool execution completed.')
+
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
@@ -219,8 +236,9 @@ function App() {
           found = true
           return {
             ...tc,
-            result: data.result,
-            status: (data.isError ? 'error' : 'done') as 'error' | 'done',
+            result: resultText,
+            status: (isError ? 'error' : 'done') as 'error' | 'done',
+            policyDecision: data.policyDecision,
           }
         }
         return tc
@@ -233,10 +251,11 @@ function App() {
             ...toolCalls,
             {
               id: data.id,
-              name: data.name,
+              name: toolName,
               args: '',
-              result: data.result,
-              status: (data.isError ? 'error' : 'done') as 'error' | 'done',
+              result: resultText,
+              status: (isError ? 'error' : 'done') as 'error' | 'done',
+              policyDecision: data.policyDecision,
             } as const,
           ]
 
@@ -247,7 +266,18 @@ function App() {
 
   // 错误通知（Sandbox 拒绝 / 工具执行失败）
   useEvent('agent:error', (msg: RpcMessage) => {
-    const data = msg.data as { id?: string; tool?: string; error?: string; reason?: string }
+    const data = msg.data as {
+      id?: string;
+      tool?: string;
+      error?: string;
+      reason?: string;
+      policyDecision?: {
+        decision: 'allow' | 'deny';
+        mode: string;
+        permissionClass: string;
+        reason: string;
+      };
+    }
     const errorText = data.reason || data.error || 'Unknown error'
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
@@ -258,7 +288,12 @@ function App() {
         const hit = (data.id ? tc.id === data.id : data.tool ? tc.name === data.tool : false) && tc.status === 'running'
         if (hit) {
           matched = true
-          return { ...tc, result: `⚠️ ${errorText}`, status: 'error' as const }
+          return {
+            ...tc,
+            result: `⚠️ ${errorText}`,
+            status: 'error' as const,
+            policyDecision: data.policyDecision ?? tc.policyDecision,
+          }
         }
         return tc
       })
@@ -273,6 +308,7 @@ function App() {
               args: '',
               result: `⚠️ ${errorText}`,
               status: 'error' as const,
+              policyDecision: data.policyDecision,
             },
           ]
 

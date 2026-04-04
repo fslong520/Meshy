@@ -4,6 +4,7 @@ import { useWebSocket, useEvent, type ChatMessage } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock, PreBlock } from './CodeBlock'
+import { ToolPolicyDecisionBadge } from './ToolPolicyDecisionBadge'
 
 interface Props {
     messages: ChatMessage[];
@@ -385,6 +386,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                             <span className="icon">⚙</span>
                                             <span className="tool-name">[Running] {tc.name}</span>
                                             {toolTarget && <span className="tool-target" style={{ marginLeft: 6, color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: '0.9em' }}>{displayTarget}</span>}
+                                            <ToolPolicyDecisionBadge decision={tc.policyDecision} />
                                         </div>
                                     )
                                 }
@@ -401,6 +403,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                         </div>
                                         {expanded && (
                                             <div className="tool-block-body" onClick={(e) => e.stopPropagation()}>
+                                                <ToolPolicyDecisionBadge decision={tc.policyDecision} />
                                                 <div className="arg-box"><strong>Input:</strong> {tc.args}</div>
                                                 {tc.result && <div className="result-box"><strong>Output:</strong> {tc.result}</div>}
                                             </div>
