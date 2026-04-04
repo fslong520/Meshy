@@ -13,6 +13,8 @@
  * 工作流通过 JSON 定义，存储在 `.agent/workflows/` 目录下。
  */
 
+import { RuntimeTaskManager, type RuntimeTaskRecord } from '../runtime/tasks/task-manager.js';
+
 // ─── 工作流定义 ───
 export interface WorkflowDefinition {
     name: string;
@@ -66,9 +68,11 @@ export type StepExecutor = (
 export class WorkflowEngine {
     private results: Map<string, StepResult> = new Map();
     private executor: StepExecutor;
+    private taskManager: RuntimeTaskManager;
 
-    constructor(executor: StepExecutor) {
+    constructor(executor: StepExecutor, taskManager?: RuntimeTaskManager) {
         this.executor = executor;
+        this.taskManager = taskManager ?? new RuntimeTaskManager();
     }
 
     /**
@@ -76,6 +80,7 @@ export class WorkflowEngine {
      */
     public async run(workflow: WorkflowDefinition, initialInput: string): Promise<Map<string, StepResult>> {
         this.results.clear();
+        this.taskManager.clear();
 
         // 初始化所有步骤为 pending
         for (const step of workflow.steps) {
@@ -84,6 +89,12 @@ export class WorkflowEngine {
                 status: 'pending',
                 output: '',
                 retries: 0,
+            });
+
+            this.taskManager.createTask({
+                id: step.id,
+                description: step.name,
+                status: 'pending',
             });
         }
 
@@ -101,6 +112,13 @@ export class WorkflowEngine {
      */
     public getResults(): Map<string, StepResult> {
         return new Map(this.results);
+    }
+
+    /**
+     * 获取工作流关联的运行时任务快照。
+     */
+    public getTaskRecords(): RuntimeTaskRecord[] {
+        return this.taskManager.listTasks();
     }
 
     // ═══════════════════════════════════════════
@@ -151,6 +169,7 @@ export class WorkflowEngine {
         const result = this.results.get(step.id)!;
         result.status = 'running';
         result.startedAt = new Date().toISOString();
+        this.taskManager.transitionTask(step.id, 'running');
 
         // 构建输入：来自依赖步骤的输出
         const input = this.buildStepInput(step, initialInput);
@@ -169,6 +188,7 @@ export class WorkflowEngine {
                 result.status = 'completed';
                 result.completedAt = new Date().toISOString();
                 result.retries = attempt;
+                this.taskManager.transitionTask(step.id, 'completed');
 
                 // 处理条件路由
                 if (step.condition && output.includes(step.condition.contains)) {
@@ -186,6 +206,7 @@ export class WorkflowEngine {
                     result.status = 'failed';
                     result.output = `FAILED: ${message}`;
                     result.completedAt = new Date().toISOString();
+                    this.taskManager.transitionTask(step.id, 'failed', message);
                 }
             }
         }

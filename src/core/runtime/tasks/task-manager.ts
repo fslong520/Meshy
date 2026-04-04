@@ -33,6 +33,10 @@ const ALLOWED_TRANSITIONS: Record<RuntimeTaskStatus, RuntimeTaskStatus[]> = {
 export class RuntimeTaskManager {
     private readonly tasks = new Map<string, RuntimeTaskRecord>();
 
+    public clear(): void {
+        this.tasks.clear();
+    }
+
     public createTask(input: CreateRuntimeTaskInput): RuntimeTaskRecord {
         const now = new Date().toISOString();
         const record: RuntimeTaskRecord = {
