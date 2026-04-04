@@ -31,6 +31,13 @@ export interface ToolManifestSummary {
 
 export type ToolPolicyMode = 'standard' | 'read_only';
 
+interface ToolPolicyDecision {
+    decision: 'allow' | 'deny';
+    mode: ToolPolicyMode;
+    permissionClass: ToolPermissionClass;
+    reason: string;
+}
+
 export class ToolRegistry {
     private builtinTools: Map<string, ToolDefinition> = new Map();
     private catalog: ToolCatalog;
@@ -146,10 +153,28 @@ export class ToolRegistry {
             return policyBlock;
         }
 
+        const allowDecision: ToolPolicyDecision = {
+            decision: 'allow',
+            mode: this.policyMode,
+            permissionClass: tool.manifest.permissionClass,
+            reason: this.policyMode === 'read_only'
+                ? 'permissionClass read is allowed in read-only mode'
+                : 'policy mode allows tool execution',
+        };
+
         const timeoutMs = tool.manifest.timeoutMs;
 
         if (timeoutMs === null || timeoutMs <= 0) {
-            return tool.execute(args, ctx);
+            try {
+                const result = await tool.execute(args, ctx);
+                return this.withPolicyDecision(result, allowDecision);
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                return this.withPolicyDecision({
+                    output: `Tool "${tool.id}" execution failed: ${message}`,
+                    isError: true,
+                }, allowDecision);
+            }
         }
 
         return new Promise<ToolResult>((resolve) => {
@@ -158,14 +183,14 @@ export class ToolRegistry {
             const timer = setTimeout(() => {
                 if (settled) return;
                 settled = true;
-                resolve({
+                resolve(this.withPolicyDecision({
                     output: `Tool "${tool.id}" timed out after ${timeoutMs}ms.`,
                     isError: true,
                     metadata: {
                         timeoutMs,
                         policy: 'manifest-timeout',
                     },
-                });
+                } satisfies ToolResult, allowDecision));
             }, timeoutMs);
 
             tool.execute(args, ctx)
@@ -173,19 +198,29 @@ export class ToolRegistry {
                     if (settled) return;
                     settled = true;
                     clearTimeout(timer);
-                    resolve(result);
+                    resolve(this.withPolicyDecision(result, allowDecision));
                 })
                 .catch((error: unknown) => {
                     if (settled) return;
                     settled = true;
                     clearTimeout(timer);
                     const message = error instanceof Error ? error.message : String(error);
-                    resolve({
+                    resolve(this.withPolicyDecision({
                         output: `Tool "${tool.id}" execution failed: ${message}`,
                         isError: true,
-                    });
+                    }, allowDecision));
                 });
         });
+    }
+
+    private withPolicyDecision(result: ToolResult, policyDecision: ToolPolicyDecision): ToolResult {
+        return {
+            ...result,
+            metadata: {
+                ...(result.metadata ?? {}),
+                policyDecision,
+            },
+        };
     }
 
     private evaluatePolicy(tool: ToolDefinition): ToolResult | null {
@@ -204,6 +239,12 @@ export class ToolRegistry {
                 policyMode: this.policyMode,
                 permissionClass: tool.manifest.permissionClass,
                 policy: 'manifest-read-only',
+                policyDecision: {
+                    decision: 'deny',
+                    mode: this.policyMode,
+                    permissionClass: tool.manifest.permissionClass,
+                    reason: `permissionClass ${tool.manifest.permissionClass} is blocked in read-only mode`,
+                } satisfies ToolPolicyDecision,
             },
         };
     }

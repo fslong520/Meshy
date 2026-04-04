@@ -27,6 +27,11 @@ describe('ToolRegistry policy precheck', () => {
         expect(result.output).toContain('blocked by read-only policy');
         expect(result.metadata?.policyMode).toBe('read_only');
         expect(result.metadata?.permissionClass).toBe('write');
+        expect((result.metadata as any)?.policyDecision).toMatchObject({
+            decision: 'deny',
+            mode: 'read_only',
+            permissionClass: 'write',
+        });
     });
 
     it('allows read permission tools in read-only policy mode', async () => {
@@ -50,5 +55,10 @@ describe('ToolRegistry policy precheck', () => {
 
         expect(result.isError).not.toBe(true);
         expect(result.output).toBe('safe read');
+        expect((result.metadata as any)?.policyDecision).toMatchObject({
+            decision: 'allow',
+            mode: 'read_only',
+            permissionClass: 'read',
+        });
     });
 });

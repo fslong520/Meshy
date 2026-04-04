@@ -29,6 +29,11 @@ describe('ToolRegistry timeout policy', () => {
         expect(result.isError).toBe(true);
         expect(result.output).toContain('timed out');
         expect(result.metadata?.timeoutMs).toBe(10);
+        expect((result.metadata as any)?.policyDecision).toMatchObject({
+            decision: 'allow',
+            mode: 'standard',
+            permissionClass: 'exec',
+        });
     });
 
     it('allows tool completion when manifest timeout is null', async () => {
@@ -53,5 +58,10 @@ describe('ToolRegistry timeout policy', () => {
 
         expect(result.isError).not.toBe(true);
         expect(result.output).toBe('ok');
+        expect((result.metadata as any)?.policyDecision).toMatchObject({
+            decision: 'allow',
+            mode: 'standard',
+            permissionClass: 'read',
+        });
     });
 });
