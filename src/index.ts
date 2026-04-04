@@ -14,6 +14,7 @@ import { saveProjectedMcpConfig } from './core/plugins/runtime/mcp-persistence.j
 import { rankSkills } from './core/skills/retrieval.js';
 import { deriveSkillRetrievalBias } from './core/plugins/runtime/skill-bias.js';
 import type { ToolManifestEntry } from './core/tool/registry.js';
+import type { ToolPolicyMode } from './core/tool/registry.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -240,6 +241,8 @@ export function registerServerRuntimeHandlers(
     tools?: {
         listManifestEntries: () => ToolManifestEntry[];
         getManifest: (name: string) => ToolManifestEntry['manifest'] | null;
+        getPolicyMode: () => ToolPolicyMode;
+        setPolicyMode: (mode: ToolPolicyMode) => void;
         summarizeManifestEntries: () => {
             total: number;
             bySource: { builtin: number; catalog: number };
@@ -345,6 +348,9 @@ export function registerServerRuntimeHandlers(
 
         daemon.sendResponse(ws, msgId, {
             manifests,
+            policy: {
+                mode: tools.getPolicyMode(),
+            },
             summary: tools.summarizeManifestEntries(),
         });
     });
@@ -359,6 +365,39 @@ export function registerServerRuntimeHandlers(
         daemon.sendResponse(ws, msgId, {
             name,
             manifest: tools.getManifest(name),
+        });
+    });
+
+    daemon.on('tool:policy:get', (ws: any, msgId: string) => {
+        if (!tools) {
+            daemon.sendResponse(ws, msgId, { mode: 'standard' });
+            return;
+        }
+
+        daemon.sendResponse(ws, msgId, {
+            mode: tools.getPolicyMode(),
+        });
+    });
+
+    daemon.on('tool:policy:set', (params: any, ws: any, msgId: string) => {
+        if (!tools) {
+            daemon.sendResponse(ws, msgId, { success: false, error: 'Tool policy adapter unavailable.' });
+            return;
+        }
+
+        const mode = params?.mode;
+        if (mode !== 'standard' && mode !== 'read_only') {
+            daemon.sendResponse(ws, msgId, {
+                success: false,
+                error: `Invalid policy mode: ${String(mode)}`,
+            });
+            return;
+        }
+
+        tools.setPolicyMode(mode);
+        daemon.sendResponse(ws, msgId, {
+            success: true,
+            mode: tools.getPolicyMode(),
         });
     });
 }
@@ -420,6 +459,8 @@ export async function runServer(port: number) {
     registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter, {
         listManifestEntries: () => engine.getToolRegistry().listManifestEntries(),
         getManifest: (name: string) => engine.getToolRegistry().getManifest(name),
+        getPolicyMode: () => engine.getToolRegistry().getPolicyMode(),
+        setPolicyMode: (mode) => engine.getToolRegistry().setPolicyMode(mode),
         summarizeManifestEntries: () => engine.getToolRegistry().summarizeManifestEntries(),
     });
 
