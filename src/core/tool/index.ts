@@ -14,6 +14,14 @@ export { ToolRAGIndex, type ToolDocument } from './tool-rag.js';
 export { ToolPackRegistry, createDefaultToolPackRegistry, type ToolPack } from './tool-pack.js';
 export { createManageToolsDefinition } from './manage-tools.js';
 export { zodToJsonSchema } from './schema-util.js';
+export {
+    DEFAULT_TOOL_MANIFEST,
+    normalizeToolManifest,
+    type ToolManifest,
+    type PartialToolManifest,
+    type ToolPermissionClass,
+    type ToolOutputPersistence,
+} from './manifest.js';
 
 // Built-in Tools
 export { BashTool } from './bash.js';

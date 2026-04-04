@@ -10,6 +10,11 @@
 import { z } from 'zod';
 
 import { Session } from '../session/state.js';
+import {
+    normalizeToolManifest,
+    type PartialToolManifest,
+    type ToolManifest,
+} from './manifest.js';
 
 // ─── 工具执行上下文 ───
 export interface ToolContext {
@@ -31,6 +36,7 @@ export interface ToolDefinition<P extends z.ZodType = z.ZodType> {
     id: string;
     description: string;
     parameters: P;
+    manifest: ToolManifest;
     execute: (args: z.infer<P>, ctx: ToolContext) => Promise<ToolResult>;
 }
 
@@ -43,6 +49,7 @@ export function defineTool<P extends z.ZodType>(
     init: {
         description: string;
         parameters: P;
+        manifest?: PartialToolManifest;
         execute: (args: z.infer<P>, ctx: ToolContext) => Promise<ToolResult>;
     },
 ): ToolDefinition<P> {
@@ -52,6 +59,7 @@ export function defineTool<P extends z.ZodType>(
         id,
         description: init.description,
         parameters: init.parameters,
+        manifest: normalizeToolManifest(init.manifest),
         execute: async (args: z.infer<P>, ctx: ToolContext): Promise<ToolResult> => {
             // Zod 参数校验
             const parsed = init.parameters.safeParse(args);
