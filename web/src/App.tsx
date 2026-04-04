@@ -3,12 +3,15 @@ import {
   useWebSocket,
   useEvent,
   sendRpc,
+  clearPolicyDecisionTimeline,
   getPolicyDecisionTimeline,
+  replacePolicyDecisionTimeline,
   type ChatMessage,
   type RpcMessage,
   type PolicyDecisionEvent,
 } from './store/ws'
 import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
+import { hydrateReplayView } from './store/replay-hydration'
 import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
@@ -16,94 +19,29 @@ import { InputArea } from './components/InputArea'
 
 // ─── Replay 类型定义 ───
 
-interface ReplayStep {
-  index: number;
-  role: 'system' | 'user' | 'assistant';
-  type: 'text' | 'tool_call' | 'tool_result';
-  summary: string;
-  raw: unknown; // Added 'raw' type
-}
-
 interface ReplayExport {
   sessionId: string;
   totalSteps: number;
-  steps: ReplayStep[];
+  steps: Array<{
+    index: number;
+    role: 'system' | 'user' | 'assistant';
+    type: 'text' | 'tool_call' | 'tool_result';
+    summary: string;
+    raw: unknown;
+  }>;
   blackboard: {
     currentGoal: string;
     tasks: Array<{ id: string; description: string; status: string }>;
   };
-}
-
-/**
- * 将 Replay 步骤转换为 ChatMessage 数组，用于在 ChatPanel 中回放历史。
- */
-function replayToMessages(replay: ReplayExport): ChatMessage[] {
-  const messages: ChatMessage[] = []
-
-  /** 确保最后一条消息是 agent 且有 toolCalls 数组，否则创建一个 */
-  const ensureAgentContext = (stepIndex: number): ChatMessage => {
-    let last = messages[messages.length - 1]
-    if (!last || last.role !== 'agent') {
-      const agentMsg: ChatMessage = {
-        id: `replay-agent-${stepIndex}`,
-        role: 'agent',
-        content: '',
-        timestamp: Date.now(),
-        toolCalls: [],
-      }
-      messages.push(agentMsg)
-      last = agentMsg
-    }
-    if (!last.toolCalls) last.toolCalls = []
-    return last
-  }
-
-  for (const step of replay.steps) {
-    if (step.role === 'system') continue
-
-    // ── tool_call: 从 raw 中提取结构化数据 ──
-    if (step.type === 'tool_call') {
-      const agent = ensureAgentContext(step.index)
-      const raw = step.raw as { id?: string; name?: string; arguments?: unknown } | null
-
-      agent.toolCalls!.push({
-        id: raw?.id ?? `mock-tc-${step.index}`,
-        name: raw?.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, ''),
-        args: raw?.arguments ? JSON.stringify(raw.arguments) : '',
-        status: 'done',
-      })
-      continue
-    }
-
-    // ── tool_result: 按 id 匹配到对应的 tool_call ──
-    if (step.type === 'tool_result') {
-      const raw = step.raw as { id?: string; content?: string } | null
-      const resultText = raw?.content ?? step.summary.replace(/^Result:\s*/, '')
-
-      // 查找上一个 agent 消息中匹配的 tool_call 并附加 result
-      const last = messages[messages.length - 1]
-      if (last?.role === 'agent' && last.toolCalls) {
-        const matchedTc = raw?.id
-          ? last.toolCalls.find(tc => tc.id === raw.id)
-          : last.toolCalls[last.toolCalls.length - 1]
-        if (matchedTc) {
-          matchedTc.result = resultText
-        }
-      }
-      continue
-    }
-
-    // ── 普通文本消息 ──
-    const role: 'user' | 'agent' = step.role === 'user' ? 'user' : 'agent'
-    messages.push({
-      id: `replay-${step.index}`,
-      role,
-      content: step.type === 'text' ? (step.raw as string) : step.summary,
-      timestamp: Date.now(),
-    })
-  }
-
-  return messages
+  policyDecisions?: Array<{
+    id: string;
+    tool: string;
+    decision: 'allow' | 'deny';
+    mode: string;
+    permissionClass: string;
+    reason: string;
+    timestamp: string;
+  }>
 }
 
 function App() {
@@ -179,6 +117,8 @@ function App() {
       setActiveSession(null)
       setBbGoal('')
       setBbTasks([])
+      clearPolicyDecisionTimeline()
+      setPolicyDecisions([])
     } else if (data.sessionId !== activeSession?.id) {
       handleSessionSwitch(data.sessionId)
     }
@@ -404,15 +344,19 @@ function App() {
     setActiveSession({ id: sessionId, title })
     sendRpc<{ success: boolean; replay?: ReplayExport }>('session:switch', { sessionId }).then((res) => {
       if (res?.success && res.replay) {
-        const historicalMessages = replayToMessages(res.replay)
-        setMessages(historicalMessages)
+        const hydrated = hydrateReplayView(res.replay)
+        setMessages(hydrated.messages)
         setBbGoal(res.replay.blackboard.currentGoal)
         setBbTasks(res.replay.blackboard.tasks)
+        replacePolicyDecisionTimeline(hydrated.policyDecisions)
+        setPolicyDecisions(getPolicyDecisionTimeline())
       } else {
         // 新 session，清空消息
         setMessages([])
         setBbGoal('')
         setBbTasks([])
+        clearPolicyDecisionTimeline()
+        setPolicyDecisions([])
       }
     })
   }, [])
@@ -428,6 +372,8 @@ function App() {
           } else {
             setMessages([])
             setActiveSession(null)
+            clearPolicyDecisionTimeline()
+            setPolicyDecisions([])
           }
         }
       })
@@ -440,7 +386,10 @@ function App() {
     } else if (action === 'compact') {
       sendRpc<{ success: boolean; replay?: ReplayExport }>('session:compact', { id: activeSession.id }).then(res => {
         if (res?.success && res.replay) {
-          setMessages(replayToMessages(res.replay))
+          const hydrated = hydrateReplayView(res.replay)
+          setMessages(hydrated.messages)
+          replacePolicyDecisionTimeline(hydrated.policyDecisions)
+          setPolicyDecisions(getPolicyDecisionTimeline())
         }
       })
     }

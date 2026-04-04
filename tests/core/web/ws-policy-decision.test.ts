@@ -3,6 +3,7 @@ import {
     clearPolicyDecisionTimeline,
     getPolicyDecisionTimeline,
     ingestPolicyDecisionEvent,
+    replacePolicyDecisionTimeline,
     type RpcMessage,
 } from '../../../web/src/store/ws.js';
 
@@ -39,5 +40,26 @@ describe('ws policy decision timeline', () => {
         expect(ingestPolicyDecisionEvent(unrelated)).toBeNull();
         expect(ingestPolicyDecisionEvent(invalid)).toBeNull();
         expect(getPolicyDecisionTimeline()).toHaveLength(0);
+    });
+
+    it('replaces the timeline for replay hydration', () => {
+        clearPolicyDecisionTimeline();
+
+        replacePolicyDecisionTimeline([
+            {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'blocked by policy',
+                timestamp: 123,
+            },
+        ]);
+
+        const timeline = getPolicyDecisionTimeline();
+        expect(timeline).toHaveLength(1);
+        expect(timeline[0]?.id).toBe('tool-call-1');
+        expect(timeline[0]?.decision).toBe('deny');
     });
 });

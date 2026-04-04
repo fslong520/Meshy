@@ -28,6 +28,8 @@ export interface StandardToolResult {
     type: 'tool_result';
     id: string; // Tool call id
     content: string;
+    isError?: boolean;
+    metadata?: Record<string, unknown>;
 }
 
 export interface AgentMessageEvent {

@@ -175,6 +175,7 @@ export class Session {
             ragSelectedTools: Array.from(this.ragSelectedTools),
             activatedMcpServers: Array.from(this.activatedMcpServers),
             backgroundProcesses: this.backgroundProcesses,
+            runtimeDecisions: this.runtimeDecisions,
             toolPolicyMode: this.toolPolicyMode,
             toolPolicyHistory: this.toolPolicyHistory,
         };
@@ -202,6 +203,7 @@ export class Session {
                 session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
                 session.activeAgentId = parsedMeta.activeAgentId || 'default';
                 session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
+                session.runtimeDecisions = Array.isArray(parsedMeta.runtimeDecisions) ? parsedMeta.runtimeDecisions : [];
                 if (Array.isArray(parsedMeta.pinnedTools)) {
                     session.pinnedTools = new Set(parsedMeta.pinnedTools);
                 }
@@ -231,6 +233,7 @@ export class Session {
         session.blackboard = parsedMeta.blackboard || { currentGoal: '', tasks: [], openFiles: [], lastError: null };
         session.activeAgentId = parsedMeta.activeAgentId || 'default';
         session.backgroundProcesses = parsedMeta.backgroundProcesses || [];
+        session.runtimeDecisions = Array.isArray(parsedMeta.runtimeDecisions) ? parsedMeta.runtimeDecisions : [];
         if (Array.isArray(parsedMeta.pinnedTools)) {
             session.pinnedTools = new Set(parsedMeta.pinnedTools);
         }

@@ -48,6 +48,15 @@ export interface ReplayExport {
     totalSteps: number;
     steps: ReplayStep[];
     runtimeDecisions: RuntimeDecisionRecord[];
+    policyDecisions: Array<{
+        id: string;
+        tool: string;
+        decision: 'allow' | 'deny';
+        mode: string;
+        permissionClass: string;
+        reason: string;
+        timestamp: string;
+    }>;
     metrics: ReplayMetrics;
     blackboard: {
         currentGoal: string;
@@ -71,6 +80,43 @@ export function exportReplay(session: Session): ReplayExport {
         return messageToStep(msg, idx);
     });
     const metrics = computeReplayMetrics(session, steps);
+    const toolNamesById = new Map<string, string>();
+    for (const msg of session.history) {
+        if (isStandardToolCallContent(msg.content)) {
+            toolNamesById.set(msg.content.id, msg.content.name);
+        }
+    }
+    const policyDecisions = steps.flatMap((step) => {
+        if (step.type !== 'tool_result') {
+            return [];
+        }
+
+        const raw = step.raw as {
+            id?: string;
+            metadata?: {
+                policyDecision?: {
+                    decision?: 'allow' | 'deny';
+                    mode?: string;
+                    permissionClass?: string;
+                    reason?: string;
+                };
+            };
+        };
+        const policyDecision = raw.metadata?.policyDecision;
+        if (!raw.id || !policyDecision?.decision || !policyDecision.mode || !policyDecision.permissionClass || !policyDecision.reason) {
+            return [];
+        }
+
+        return [{
+            id: raw.id,
+            tool: toolNamesById.get(raw.id) ?? 'unknown_tool',
+            decision: policyDecision.decision,
+            mode: policyDecision.mode,
+            permissionClass: policyDecision.permissionClass,
+            reason: policyDecision.reason,
+            timestamp: step.timestamp,
+        }];
+    });
 
     return {
         sessionId: session.id,
@@ -78,6 +124,7 @@ export function exportReplay(session: Session): ReplayExport {
         totalSteps: steps.length,
         steps,
         runtimeDecisions: session.runtimeDecisions,
+        policyDecisions,
         metrics,
         blackboard: {
             currentGoal: session.blackboard.currentGoal,
@@ -246,6 +293,7 @@ function normalizeReplay(value: any): ReplayExport {
         totalSteps: value.totalSteps ?? steps.length,
         steps,
         runtimeDecisions: Array.isArray(value.runtimeDecisions) ? value.runtimeDecisions : [],
+        policyDecisions: Array.isArray(value.policyDecisions) ? value.policyDecisions : [],
         metrics: value.metrics ?? {
             messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
             textMessages: 0,

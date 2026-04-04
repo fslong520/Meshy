@@ -123,6 +123,14 @@ export function getPolicyDecisionTimeline(): PolicyDecisionEvent[] {
     return policyDecisionTimeline.map((item) => ({ ...item }));
 }
 
+export function replacePolicyDecisionTimeline(events: PolicyDecisionEvent[]): void {
+    policyDecisionTimeline.length = 0;
+    policyDecisionTimeline.push(...events.map((item) => ({ ...item })));
+    if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
+        policyDecisionTimeline.splice(0, policyDecisionTimeline.length - POLICY_TIMELINE_LIMIT);
+    }
+}
+
 export function clearPolicyDecisionTimeline(): void {
     policyDecisionTimeline.length = 0;
 }

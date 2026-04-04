@@ -53,4 +53,20 @@ describe('Session', () => {
         expect(restored.toolPolicyHistory).toHaveLength(1);
         expect(restored.toolPolicyHistory[0]?.nextMode).toBe('read_only');
     });
+
+    it('persists runtime decisions through serialization', () => {
+        const session = new Session('policy-decisions-session');
+        session.appendRuntimeDecision({
+            loopIndex: 1,
+            injectedSkills: ['debug-runtime'],
+            activeMcpServers: ['filesystem'],
+            reasonSummary: 'test runtime decision',
+        });
+
+        const serialized = session.serialize();
+        const restored = Session.deserialize(serialized);
+
+        expect(restored.runtimeDecisions).toHaveLength(1);
+        expect(restored.runtimeDecisions[0]?.reasonSummary).toBe('test runtime decision');
+    });
 });

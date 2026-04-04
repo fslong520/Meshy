@@ -1185,14 +1185,14 @@ export class TaskEngine {
                         const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
                         const resultObj = await this.executeTool(call.id, call.name, parsedArgs, injection.subagent?.allowedTools);
                         this.daemon?.broadcast('agent:tool_result', { id: call.id, name: call.name, result: resultObj.output, isError: resultObj.isError });
-                        return { id: call.id, result: resultObj.output };
+                        return { id: call.id, result: resultObj.output, isError: resultObj.isError, metadata: resultObj.metadata };
                     });
 
                     const results = await Promise.all(executionPromises);
 
                     // 3. Add ALL tool_result messages to history in order
                     // Phase 20: Offload large tool outputs to files
-                    for (const { id, result } of results) {
+                    for (const { id, result, isError, metadata } of results) {
                         const toolName = pendingToolCalls.find(c => c.id === id)?.name ?? 'unknown';
                         const offloadResult = this.offloader.process(toolName, id, String(result));
                         this.addMessageAndAppend({
@@ -1201,6 +1201,8 @@ export class TaskEngine {
                                 type: 'tool_result',
                                 id: id,
                                 content: offloadResult.content,
+                                isError,
+                                metadata,
                             },
                         });
                     }
