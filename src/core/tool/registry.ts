@@ -10,6 +10,13 @@ import { ToolDefinition, ToolContext, ToolResult } from './define.js';
 import { StandardTool } from '../llm/provider.js';
 import { ToolCatalog } from './catalog.js';
 import { zodToJsonSchema } from './schema-util.js';
+import { type ToolManifest } from './manifest.js';
+
+export interface ToolManifestEntry {
+    id: string;
+    source: 'builtin' | 'catalog';
+    manifest: ToolManifest;
+}
 
 export class ToolRegistry {
     private builtinTools: Map<string, ToolDefinition> = new Map();
@@ -156,6 +163,40 @@ export class ToolRegistry {
 
     public has(name: string): boolean {
         return this.builtinTools.has(name) || this.catalog.lookupDefinition(name) !== undefined;
+    }
+
+    public getManifest(name: string): ToolManifest | null {
+        const builtin = this.builtinTools.get(name);
+        if (builtin) {
+            return { ...builtin.manifest };
+        }
+
+        const catalogTool = this.catalog.lookupDefinition(name);
+        if (catalogTool) {
+            return { ...catalogTool.manifest };
+        }
+
+        return null;
+    }
+
+    public listManifestEntries(): ToolManifestEntry[] {
+        const builtinEntries: ToolManifestEntry[] = Array.from(this.builtinTools.values()).map((tool) => ({
+            id: tool.id,
+            source: 'builtin',
+            manifest: { ...tool.manifest },
+        }));
+
+        const catalogEntries: ToolManifestEntry[] = this.catalog
+            .getAllEntries()
+            .map((entry) => this.catalog.lookupDefinition(entry.id))
+            .filter((tool): tool is ToolDefinition => Boolean(tool))
+            .map((tool) => ({
+                id: tool.id,
+                source: 'catalog',
+                manifest: { ...tool.manifest },
+            }));
+
+        return [...builtinEntries, ...catalogEntries];
     }
 
     public ids(): string[] {
