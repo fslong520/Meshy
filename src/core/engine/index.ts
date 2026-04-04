@@ -1494,6 +1494,15 @@ export class TaskEngine {
                 policyDecision: (result.metadata as Record<string, unknown> | undefined)?.policyDecision,
             });
 
+            const policyDecision = (result.metadata as Record<string, unknown> | undefined)?.policyDecision as Record<string, unknown> | undefined;
+            if (policyDecision) {
+                this.daemon?.broadcast('agent:policy_decision', {
+                    id,
+                    tool: name,
+                    ...policyDecision,
+                });
+            }
+
             return {
                 output: result.output,
                 isError: result.isError,

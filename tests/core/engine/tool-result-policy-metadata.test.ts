@@ -40,5 +40,13 @@ describe('TaskEngine tool result daemon payload', () => {
                 permissionClass: 'read',
             }),
         }));
+
+        expect(engine.daemon.broadcast).toHaveBeenCalledWith('agent:policy_decision', expect.objectContaining({
+            id: 'tool-call-1',
+            tool: 'read_note',
+            decision: 'allow',
+            mode: 'read_only',
+            permissionClass: 'read',
+        }));
     });
 });

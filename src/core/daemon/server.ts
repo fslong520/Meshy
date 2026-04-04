@@ -61,6 +61,7 @@ export type DaemonEventType =
     | 'agent:text'            // Agent 流式文本输出
     | 'agent:tool_call'       // Agent 发起工具调用
     | 'agent:tool_result'     // 工具执行结果
+    | 'agent:policy_decision' // 工具策略决策事件（allow/deny + reason）
     | 'agent:done'            // 任务完成
     | 'agent:error'           // 错误
     | 'agent:approve'         // Agent 请求审批
