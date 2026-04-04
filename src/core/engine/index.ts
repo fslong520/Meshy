@@ -1426,7 +1426,7 @@ export class TaskEngine {
         }));
     }
 
-    private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<{ output: string, isError?: boolean }> {
+    private async executeTool(id: string, name: string, args: Record<string, unknown>, allowedTools?: string[]): Promise<{ output: string, isError?: boolean, metadata?: Record<string, unknown> }> {
         // ── Phase 4: Intercept Selective MCP Tool Loading (Meta-Tool) ──
         if (name.startsWith('_load_mcp_server_')) {
             // Extract server name from the meta-tool name
@@ -1486,7 +1486,19 @@ export class TaskEngine {
                 workspaceRoot: process.cwd(),
                 session: this.session, // 注入 Session 供按需工具 (useTool) 修改挂载状态
             });
-            return { output: result.output, isError: result.isError };
+
+            this.daemon?.broadcast('agent:tool_result', {
+                id,
+                tool: name,
+                success: !result.isError,
+                policyDecision: (result.metadata as Record<string, unknown> | undefined)?.policyDecision,
+            });
+
+            return {
+                output: result.output,
+                isError: result.isError,
+                metadata: result.metadata,
+            };
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
             this.daemon?.broadcast('agent:error', { id, tool: name, error: message });
