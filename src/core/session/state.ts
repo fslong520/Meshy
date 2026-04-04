@@ -1,5 +1,6 @@
 import { StandardMessage } from '../llm/provider.js';
 import type { RuntimeTaskStatus } from '../runtime/protocol.js';
+import type { ToolPolicyMode } from '../tool/registry.js';
 
 export type SessionStatus = 'active' | 'suspended' | 'archived';
 
@@ -41,6 +42,7 @@ export class Session {
     public activeAgentId: string;
     public backgroundProcesses: BackgroundProcessState[];
     public runtimeDecisions: RuntimeDecisionRecord[];
+    public toolPolicyMode: ToolPolicyMode;
 
     /** LLM/用户显式 pin 的工具（跨轮持久） */
     public pinnedTools: Set<string>;
@@ -73,6 +75,7 @@ export class Session {
         this.activeAgentId = 'default';
         this.backgroundProcesses = [];
         this.runtimeDecisions = [];
+        this.toolPolicyMode = 'standard';
     }
 
     public touch() {
@@ -163,6 +166,7 @@ export class Session {
             ragSelectedTools: Array.from(this.ragSelectedTools),
             activatedMcpServers: Array.from(this.activatedMcpServers),
             backgroundProcesses: this.backgroundProcesses,
+            toolPolicyMode: this.toolPolicyMode,
         };
 
         let result = JSON.stringify(baseState) + '\n';
@@ -200,6 +204,9 @@ export class Session {
                 if (parsedMeta.activatedMcpServers) {
                     session.activatedMcpServers = new Set(parsedMeta.activatedMcpServers);
                 }
+                if (parsedMeta.toolPolicyMode === 'read_only' || parsedMeta.toolPolicyMode === 'standard') {
+                    session.toolPolicyMode = parsedMeta.toolPolicyMode;
+                }
                 return session;
             }
         } catch (e) {
@@ -222,6 +229,9 @@ export class Session {
         if (parsedMeta.status) session.status = parsedMeta.status;
         if (parsedMeta.activatedMcpServers) {
             session.activatedMcpServers = new Set(parsedMeta.activatedMcpServers);
+        }
+        if (parsedMeta.toolPolicyMode === 'read_only' || parsedMeta.toolPolicyMode === 'standard') {
+            session.toolPolicyMode = parsedMeta.toolPolicyMode;
         }
 
         // Replay events

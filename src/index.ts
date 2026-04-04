@@ -447,6 +447,9 @@ export async function runServer(port: number) {
         daemon,
     });
 
+    // Restore persisted tool policy mode from session snapshot.
+    engine.getToolRegistry().setPolicyMode(session.toolPolicyMode ?? 'standard');
+
     const harnessAdapter = new HarnessServerAdapter(activeWorkspace.rootPath);
     const pluginRoot = path.join(activeWorkspace.rootPath, '.meshy', 'plugins');
     const pluginLoader = new PluginLoader([pluginRoot]);
@@ -460,7 +463,11 @@ export async function runServer(port: number) {
         listManifestEntries: () => engine.getToolRegistry().listManifestEntries(),
         getManifest: (name: string) => engine.getToolRegistry().getManifest(name),
         getPolicyMode: () => engine.getToolRegistry().getPolicyMode(),
-        setPolicyMode: (mode) => engine.getToolRegistry().setPolicyMode(mode),
+        setPolicyMode: (mode) => {
+            engine.getToolRegistry().setPolicyMode(mode);
+            session.toolPolicyMode = mode;
+            sessionManager.saveSession(session);
+        },
         summarizeManifestEntries: () => engine.getToolRegistry().summarizeManifestEntries(),
     });
 
