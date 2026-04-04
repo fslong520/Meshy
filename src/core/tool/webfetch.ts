@@ -58,6 +58,9 @@ export const WebFetchTool = defineTool('webfetch', {
         url: z.string().describe('The URL to fetch content from'),
         format: z.enum(['text', 'markdown', 'html']).default('markdown').describe('The format to return the content in'),
     }),
+    manifest: {
+        permissionClass: 'network',
+    },
     async execute(params) {
         try {
             const controller = new AbortController();

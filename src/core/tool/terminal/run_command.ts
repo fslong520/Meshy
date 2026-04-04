@@ -13,6 +13,9 @@ export const RunCommandTool = defineTool('run_command', {
         command: z.string().describe('The command line string to execute.'),
         cwd: z.string().describe('The current working directory. Defaults to workspace root.'),
     }),
+    manifest: {
+        permissionClass: 'exec',
+    },
     async execute(params, ctx) {
         const cwd = params.cwd || ctx.workspaceRoot;
         try {

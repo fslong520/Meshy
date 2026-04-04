@@ -107,6 +107,9 @@ export const WebSearchTool = defineTool('websearch', {
                 .describe('Maximum number of results to return (default 5)')
         ).optional(),
     }),
+    manifest: {
+        permissionClass: 'network',
+    },
     async execute(params) {
         const maxResults = params.maxResults ?? DEFAULT_MAX_RESULTS;
 

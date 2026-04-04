@@ -35,6 +35,9 @@ export const BashTool = defineTool('bash', {
         workdir: z.string().describe('The working directory. Defaults to workspace root. Use this instead of cd.').optional(),
         description: z.string().describe('A clear, concise description of what this command does in 5-10 words'),
     }),
+    manifest: {
+        permissionClass: 'exec',
+    },
     async execute(params, ctx) {
         const cwd = params.workdir || ctx.workspaceRoot;
         const timeout = params.timeout ?? DEFAULT_TIMEOUT_MS;

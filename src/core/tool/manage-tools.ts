@@ -33,6 +33,9 @@ export function createManageToolsDefinition(
             toolIds: z.array(z.string()).describe('Array of tool IDs.').optional(),
             categories: z.array(z.string()).describe('Array of categories (used with "activate").').optional(),
         }),
+        manifest: {
+            permissionClass: 'write',
+        },
         async execute(params, ctx) {
             const session = ctx.session;
             if (!session) {

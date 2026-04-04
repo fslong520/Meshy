@@ -10,6 +10,9 @@ export function createBlackboardTools() {
             parameters: z.object({
                 key: z.string().describe('The state key to read. Max 50 chars.').optional(),
             }),
+            manifest: {
+                permissionClass: 'read',
+            },
             async execute(args, context) {
                 if (!context || !context.workspaceRoot) {
                     return { output: JSON.stringify({ error: 'No workspace context available to find the blackboard.' }) };
@@ -29,6 +32,9 @@ export function createBlackboardTools() {
                 key: z.string().describe('The state key to write to. Use descriptive names like "database_schema" or "task_1_status"'),
                 value: z.any().describe('The JSON value to store. Can be strings, numbers, objects, or arrays.'),
             }),
+            manifest: {
+                permissionClass: 'write',
+            },
             async execute(args, context) {
                 if (!context || !context.workspaceRoot) {
                     return { output: JSON.stringify({ error: 'No workspace context available to find the blackboard.' }) };

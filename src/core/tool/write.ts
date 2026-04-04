@@ -21,6 +21,9 @@ export const WriteTool = defineTool('write', {
         filePath: z.string().describe('The absolute path to the file to write (must be absolute, not relative)'),
         content: z.string().describe('The complete content to write to the file'),
     }),
+    manifest: {
+        permissionClass: 'write',
+    },
     async execute(params, ctx) {
         let filePath = params.filePath;
         if (!path.isAbsolute(filePath)) {

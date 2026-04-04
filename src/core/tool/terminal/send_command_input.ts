@@ -12,6 +12,9 @@ export const SendCommandInputTool = defineTool('send_command_input', {
         Input: z.string().describe('The text to send to stdin. Include newline (\\n) if you want to submit/press Enter. Leave empty if purely terminating.').optional(),
         Terminate: z.boolean().describe('Set to true to forcibly kill the process instead of sending input.').optional()
     }),
+    manifest: {
+        permissionClass: 'exec',
+    },
     async execute(params) {
         const { CommandId, Input, Terminate } = params;
 
