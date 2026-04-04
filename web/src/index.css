@@ -982,6 +982,136 @@ option {
   overflow: hidden;
 }
 
+.policy-decision-panel {
+  padding: 14px 12px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.06) 0%, rgba(96, 165, 250, 0) 100%);
+}
+
+.policy-decision-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.policy-decision-panel__header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.policy-decision-panel__header p,
+.policy-decision-panel__empty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.policy-decision-panel__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.policy-decision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-decision-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.policy-decision-item--allow {
+  border-color: rgba(74, 222, 128, 0.22);
+}
+
+.policy-decision-item--deny {
+  border-color: rgba(248, 113, 113, 0.24);
+}
+
+.policy-decision-item__topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.policy-decision-item__topline code {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.policy-decision-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.policy-decision-badge--allow {
+  background: rgba(74, 222, 128, 0.14);
+  color: var(--accent);
+}
+
+.policy-decision-badge--deny {
+  background: rgba(248, 113, 113, 0.14);
+  color: var(--error);
+}
+
+.policy-decision-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.policy-decision-meta div {
+  min-width: 0;
+}
+
+.policy-decision-meta dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.policy-decision-meta dd {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.policy-decision-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 .right-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);

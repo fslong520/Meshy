@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { sendRpc } from '../store/ws'
+import { sendRpc, type PolicyDecisionEvent } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock, PreBlock } from './CodeBlock'
+import { PolicyDecisionPanel } from './PolicyDecisionPanel'
 
 type TabName = 'skills' | 'mcp' | 'soul' | 'plugins' | 'messaging';
 
@@ -14,11 +15,17 @@ const TABS: { key: TabName; label: string }[] = [
     { key: 'messaging', label: 'Msg' },
 ]
 
-export function RightPanel() {
+interface RightPanelProps {
+    policyDecisions: PolicyDecisionEvent[]
+}
+
+export function RightPanel({ policyDecisions }: RightPanelProps) {
     const [activeTab, setActiveTab] = useState<TabName>('skills')
 
     return (
         <div className="right-panel">
+            <PolicyDecisionPanel events={policyDecisions} />
+
             {/* Tabs */}
             <div className="right-tabs">
                 {TABS.map((t) => (

@@ -1,5 +1,13 @@
 import { useState, useCallback } from 'react'
-import { useWebSocket, useEvent, sendRpc, type ChatMessage, type RpcMessage } from './store/ws'
+import {
+  useWebSocket,
+  useEvent,
+  sendRpc,
+  getPolicyDecisionTimeline,
+  type ChatMessage,
+  type RpcMessage,
+  type PolicyDecisionEvent,
+} from './store/ws'
 import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
@@ -105,6 +113,7 @@ function App() {
   const [bbTasks, setBbTasks] = useState<Array<{ id: string; description: string; status: string }>>([])
   const [agentStreaming, setAgentStreaming] = useState(false)
   const [activeSession, setActiveSession] = useState<{ id: string; title?: string } | null>(null)
+  const [policyDecisions, setPolicyDecisions] = useState<PolicyDecisionEvent[]>(() => getPolicyDecisionTimeline())
 
   // 确保存在当前轮次的 Agent 消息容器，用于挂载 toolCalls / 错误等状态
   const ensureAgentContainer = useCallback((prev: ChatMessage[]): { list: ChatMessage[]; agent: ChatMessage } => {
@@ -304,6 +313,10 @@ function App() {
     })
   })
 
+  useEvent('agent:policy_decision', () => {
+    setPolicyDecisions(getPolicyDecisionTimeline())
+  })
+
   // 发送消息
   const handleSend = useCallback(
     (text: string, mode: string, attachments?: { name: string; type: string; data: string }[]) => {
@@ -405,7 +418,7 @@ function App() {
           onToggleBb={() => setBbOpen(!bbOpen)}
         />
       </div>
-      <RightPanel />
+      <RightPanel policyDecisions={policyDecisions} />
 
       {/* Blackboard Drawer (no more floating toggle – it's in InputArea toolbar) */}
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
