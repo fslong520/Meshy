@@ -61,4 +61,36 @@ describe('ToolRegistry manifest introspection', () => {
         const registry = new ToolRegistry();
         expect(registry.getManifest('unknown_tool')).toBeNull();
     });
+
+    it('summarizes manifest entries for policy/runtime consumers', () => {
+        const catalog = new ToolCatalog();
+        const registry = new ToolRegistry(catalog);
+
+        registry.register(defineTool('builtin_read', {
+            description: 'builtin read',
+            parameters: z.object({}),
+            manifest: { permissionClass: 'read', timeoutMs: null },
+            async execute() {
+                return { output: 'ok' };
+            },
+        }));
+
+        catalog.register(defineTool('lazy_exec', {
+            description: 'lazy exec',
+            parameters: z.object({}),
+            manifest: { permissionClass: 'exec', timeoutMs: 1000, retryable: true },
+            async execute() {
+                return { output: 'ok' };
+            },
+        }), 'exec', 'lazy exec tool');
+
+        const summary = registry.summarizeManifestEntries();
+        expect(summary.total).toBe(2);
+        expect(summary.bySource.builtin).toBe(1);
+        expect(summary.bySource.catalog).toBe(1);
+        expect(summary.byPermissionClass.read).toBe(1);
+        expect(summary.byPermissionClass.exec).toBe(1);
+        expect(summary.timeoutConfigured).toBe(1);
+        expect(summary.retryable).toBe(1);
+    });
 });

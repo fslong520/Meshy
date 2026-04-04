@@ -10,12 +10,23 @@ import { ToolDefinition, ToolContext, ToolResult } from './define.js';
 import { StandardTool } from '../llm/provider.js';
 import { ToolCatalog } from './catalog.js';
 import { zodToJsonSchema } from './schema-util.js';
-import { type ToolManifest } from './manifest.js';
+import { type ToolManifest, type ToolPermissionClass } from './manifest.js';
 
 export interface ToolManifestEntry {
     id: string;
     source: 'builtin' | 'catalog';
     manifest: ToolManifest;
+}
+
+export interface ToolManifestSummary {
+    total: number;
+    bySource: {
+        builtin: number;
+        catalog: number;
+    };
+    byPermissionClass: Partial<Record<ToolPermissionClass, number>>;
+    timeoutConfigured: number;
+    retryable: number;
 }
 
 export class ToolRegistry {
@@ -197,6 +208,34 @@ export class ToolRegistry {
             }));
 
         return [...builtinEntries, ...catalogEntries];
+    }
+
+    public summarizeManifestEntries(): ToolManifestSummary {
+        const entries = this.listManifestEntries();
+        const byPermissionClass: Partial<Record<ToolPermissionClass, number>> = {};
+        let timeoutConfigured = 0;
+        let retryable = 0;
+
+        for (const entry of entries) {
+            byPermissionClass[entry.manifest.permissionClass] = (byPermissionClass[entry.manifest.permissionClass] ?? 0) + 1;
+            if (entry.manifest.timeoutMs !== null && entry.manifest.timeoutMs > 0) {
+                timeoutConfigured += 1;
+            }
+            if (entry.manifest.retryable) {
+                retryable += 1;
+            }
+        }
+
+        return {
+            total: entries.length,
+            bySource: {
+                builtin: entries.filter((entry) => entry.source === 'builtin').length,
+                catalog: entries.filter((entry) => entry.source === 'catalog').length,
+            },
+            byPermissionClass,
+            timeoutConfigured,
+            retryable,
+        };
     }
 
     public ids(): string[] {

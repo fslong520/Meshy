@@ -239,6 +239,13 @@ export function registerServerRuntimeHandlers(
     },
     tools?: {
         listManifestEntries: () => ToolManifestEntry[];
+        summarizeManifestEntries: () => {
+            total: number;
+            bySource: { builtin: number; catalog: number };
+            byPermissionClass: Record<string, number | undefined>;
+            timeoutConfigured: number;
+            retryable: number;
+        };
     },
 ): void {
     daemon.on('harness:fixture:create', async (params: any, ws: any, msgId: string) => {
@@ -335,7 +342,10 @@ export function registerServerRuntimeHandlers(
             .filter((entry) => !source || entry.source === source)
             .filter((entry) => !permissionClass || entry.manifest.permissionClass === permissionClass);
 
-        daemon.sendResponse(ws, msgId, { manifests });
+        daemon.sendResponse(ws, msgId, {
+            manifests,
+            summary: tools.summarizeManifestEntries(),
+        });
     });
 }
 
@@ -395,6 +405,7 @@ export async function runServer(port: number) {
     );
     registerServerRuntimeHandlers(daemon, harnessAdapter, pluginAdapter, {
         listManifestEntries: () => engine.getToolRegistry().listManifestEntries(),
+        summarizeManifestEntries: () => engine.getToolRegistry().summarizeManifestEntries(),
     });
 
     // Cache skills in memory on startup
