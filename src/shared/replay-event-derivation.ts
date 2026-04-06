@@ -27,6 +27,23 @@ export function deriveReplayEvents(
             if (timestampCompare !== 0) {
                 return timestampCompare;
             }
+            const priority = (event: ReplayEvent): number => {
+                switch (event.type) {
+                    case 'agent:tool_call':
+                        return 0;
+                    case 'agent:policy_decision':
+                        return 1;
+                    case 'agent:tool_result':
+                        return 2;
+                    case 'agent:text':
+                    default:
+                        return 3;
+                }
+            };
+            const priorityCompare = priority(left.event) - priority(right.event);
+            if (priorityCompare !== 0) {
+                return priorityCompare;
+            }
             return left.index - right.index;
         })
         .map(({ event }) => event);

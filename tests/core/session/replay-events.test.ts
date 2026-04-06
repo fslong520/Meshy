@@ -57,22 +57,22 @@ describe('replay unified events', () => {
             },
         });
         expect(replay.events.map((event) => event.type)).toEqual([
-            'agent:text',
             'agent:tool_call',
-            'agent:tool_result',
             'agent:policy_decision',
+            'agent:tool_result',
+            'agent:text',
         ]);
-        expect(replay.events[1]).toMatchObject({
+        expect(replay.events.find((event) => event.type === 'agent:tool_call')).toMatchObject({
             type: 'agent:tool_call',
             toolCallId: 'tool-call-1',
             toolName: 'write_note',
         });
-        expect(replay.events[2]).toMatchObject({
+        expect(replay.events.find((event) => event.type === 'agent:tool_result')).toMatchObject({
             type: 'agent:tool_result',
             toolCallId: 'tool-call-1',
             isError: true,
         });
-        expect(replay.events[3]).toMatchObject({
+        expect(replay.events.find((event) => event.type === 'agent:policy_decision')).toMatchObject({
             type: 'agent:policy_decision',
             toolCallId: 'tool-call-1',
             toolName: 'write_note',

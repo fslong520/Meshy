@@ -330,4 +330,52 @@ describe('replay hydration', () => {
             status: 'done',
         });
     })
+
+    it('preserves replay timestamps instead of replacing them with now', () => {
+        const replay: ReplayExport = {
+            sessionId: 'timestamp-hydration',
+            exportedAt: '2026-04-07T00:00:00.000Z',
+            totalSteps: 1,
+            steps: [
+                {
+                    index: 0,
+                    timestamp: '2026-04-07T00:00:05.000Z',
+                    role: 'user',
+                    type: 'text',
+                    summary: 'hello',
+                    projected: {
+                        kind: 'text',
+                        content: 'hello',
+                    },
+                    raw: 'hello',
+                },
+            ],
+            events: [],
+            blackboard: {
+                currentGoal: 'Preserve hydrated timestamps',
+                tasks: [],
+                openFiles: [],
+                lastError: null,
+            },
+            policyDecisions: [],
+            runtimeDecisions: [],
+            metrics: {
+                messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+                textMessages: 0,
+                toolCalls: 0,
+                toolResults: 0,
+                totalTextCharacters: 0,
+                uniqueTools: [],
+            },
+            session: {
+                status: 'active',
+                activeAgentId: 'default',
+                messageCount: 1,
+            },
+        };
+
+        const hydrated = hydrateReplayView(replay);
+
+        expect(hydrated.messages[0]?.timestamp).toBe(Date.parse('2026-04-07T00:00:05.000Z'));
+    })
 });

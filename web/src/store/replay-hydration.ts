@@ -9,15 +9,19 @@ type NormalizedReplayEvent = ReplayEvent
 function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
   const messages: ChatMessage[] = []
   const policyDecisions: PolicyDecisionEvent[] = []
+  const parseReplayTimestamp = (value: string | undefined): number => {
+    const parsed = value ? Date.parse(value) : NaN
+    return Number.isFinite(parsed) ? parsed : 0
+  }
 
-  const ensureAgentContext = (): ChatMessage => {
+  const ensureAgentContext = (timestamp: number): ChatMessage => {
     let last = messages[messages.length - 1]
     if (!last || last.role !== 'agent') {
       const agentMsg: ChatMessage = {
         id: `replay-agent-${messages.length}`,
         role: 'agent',
         content: '',
-        timestamp: Date.now(),
+        timestamp,
         toolCalls: [],
       }
       messages.push(agentMsg)
@@ -34,13 +38,13 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
         id: `replay-event-text-${messages.length}`,
         role: event.role === 'user' ? 'user' : 'agent',
         content: event.content,
-        timestamp: Date.parse(event.timestamp) || Date.now(),
+        timestamp: parseReplayTimestamp(event.timestamp),
       })
       continue
     }
 
     if (event.type === 'agent:tool_call') {
-      const agent = ensureAgentContext()
+      const agent = ensureAgentContext(parseReplayTimestamp(event.timestamp))
       agent.toolCalls!.push({
         id: event.toolCallId,
         name: event.toolName,
@@ -70,7 +74,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
         mode: event.mode,
         permissionClass: event.permissionClass,
         reason: event.reason,
-        timestamp: Date.parse(event.timestamp) || Date.now(),
+        timestamp: parseReplayTimestamp(event.timestamp),
       })
 
       const last = messages[messages.length - 1]
@@ -93,15 +97,20 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
 
 export function replayToMessages(replay: ReplayExport): ChatMessage[] {
   const messages: ChatMessage[] = []
+  const parseReplayTimestamp = (value: string | undefined): number => {
+    const parsed = value ? Date.parse(value) : NaN
+    return Number.isFinite(parsed) ? parsed : 0
+  }
 
   const ensureAgentContext = (stepIndex: number): ChatMessage => {
     let last = messages[messages.length - 1]
     if (!last || last.role !== 'agent') {
+      const stepTimestamp = replay.steps.find((step) => step.index === stepIndex)?.timestamp
       const agentMsg: ChatMessage = {
         id: `replay-agent-${stepIndex}`,
         role: 'agent',
         content: '',
-        timestamp: Date.now(),
+        timestamp: parseReplayTimestamp(stepTimestamp),
         toolCalls: [],
       }
       messages.push(agentMsg)
@@ -149,7 +158,7 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
       id: `replay-${step.index}`,
       role,
       content: projection?.kind === 'text' ? projection.content : step.summary,
-      timestamp: Date.now(),
+      timestamp: parseReplayTimestamp(step.timestamp),
     })
   }
 
@@ -167,7 +176,7 @@ export function hydrateReplayView(replay: ReplayExport): { messages: ChatMessage
     messages: replayToMessages(normalizedReplay),
     policyDecisions: normalizedReplay.policyDecisions.map((event) => ({
       ...event,
-      timestamp: Date.parse(event.timestamp) || Date.now(),
+      timestamp: Number.isFinite(Date.parse(event.timestamp)) ? Date.parse(event.timestamp) : 0,
     })),
   }
 }

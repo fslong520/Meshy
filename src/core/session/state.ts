@@ -92,7 +92,10 @@ export class Session {
     }
 
     public addMessage(message: StandardMessage) {
-        this.history.push(message);
+        this.history.push({
+            ...message,
+            timestamp: message.timestamp ?? new Date().toISOString(),
+        });
         this.touch();
     }
 

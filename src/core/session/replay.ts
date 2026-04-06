@@ -136,7 +136,7 @@ function isStandardToolCallContent(content: StandardMessage['content'] | undefin
 
 /** 将单条消息转为 ReplayStep */
 function messageToStep(msg: StandardMessage, index: number): ReplayStep {
-    const timestamp = new Date().toISOString(); // 理想情况下消息自带时间戳
+    const timestamp = msg.timestamp ?? new Date().toISOString();
 
     if (typeof msg.content === 'string') {
         const truncated = msg.content.length > 200

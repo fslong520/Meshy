@@ -15,6 +15,7 @@ export interface StandardMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | StandardContentPart[] | StandardToolCall | StandardToolResult;
     reasoningContent?: string; // Optional thinking process for models like deepseek-reasoner
+    timestamp?: string;
 }
 
 export interface StandardToolCall {
