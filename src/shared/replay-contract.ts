@@ -4,8 +4,35 @@ export interface ReplayStep {
     role: 'system' | 'user' | 'assistant' | 'tool';
     type: 'text' | 'tool_call' | 'tool_result';
     summary: string;
+    projected?: ReplayStepProjection;
     raw: unknown;
 }
+
+export interface ReplayStepPolicyDecisionSnapshot {
+    decision: 'allow' | 'deny';
+    mode: string;
+    permissionClass: string;
+    reason: string;
+}
+
+export type ReplayStepProjection =
+    | {
+        kind: 'text';
+        content: string;
+    }
+    | {
+        kind: 'tool_call';
+        toolCallId: string;
+        toolName: string;
+        argumentsText: string;
+    }
+    | {
+        kind: 'tool_result';
+        toolCallId: string;
+        content: string;
+        isError: boolean;
+        policyDecision?: ReplayStepPolicyDecisionSnapshot;
+    };
 
 export type ReplayEvent =
     | {

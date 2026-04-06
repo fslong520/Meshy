@@ -2,6 +2,7 @@ import type { ChatMessage, PolicyDecisionEvent } from './ws'
 import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/replay-contract.js'
 import { normalizeReplayEvents } from '../../../src/shared/replay-normalization.js'
 import { normalizeReplayExport } from '../../../src/shared/replay-export-normalization.js'
+import { getReplayStepProjection } from '../../../src/shared/replay-step-projection.js'
 
 type NormalizedReplayEvent = ReplayEvent
 
@@ -115,50 +116,39 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
 
     if (step.type === 'tool_call') {
       const agent = ensureAgentContext(step.index)
-      const raw = step.raw as { id?: string; name?: string; arguments?: unknown } | null
+      const projection = getReplayStepProjection(step)
       agent.toolCalls!.push({
-        id: raw?.id ?? `mock-tc-${step.index}`,
-        name: raw?.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, ''),
-        args: raw?.arguments ? JSON.stringify(raw.arguments) : '',
+        id: projection?.kind === 'tool_call' ? projection.toolCallId : `mock-tc-${step.index}`,
+        name: projection?.kind === 'tool_call' ? projection.toolName : step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, ''),
+        args: projection?.kind === 'tool_call' ? projection.argumentsText : '',
         status: 'done',
       })
       continue
     }
 
     if (step.type === 'tool_result') {
-      const raw = step.raw as {
-        id?: string
-        content?: string
-        isError?: boolean
-        metadata?: {
-          policyDecision?: {
-            decision: 'allow' | 'deny'
-            mode: string
-            permissionClass: string
-            reason: string
-          }
-        }
-      } | null
-      const resultText = raw?.content ?? step.summary.replace(/^Result:\s*/, '')
+      const projection = getReplayStepProjection(step)
+      const resultText = projection?.kind === 'tool_result' ? projection.content : step.summary.replace(/^Result:\s*/, '')
       const last = messages[messages.length - 1]
       if (last?.role === 'agent' && last.toolCalls) {
-        const matchedTc = raw?.id
-          ? last.toolCalls.find((tc) => tc.id === raw.id)
+        const matchedTc = projection?.kind === 'tool_result'
+          ? last.toolCalls.find((tc) => tc.id === projection.toolCallId)
           : last.toolCalls[last.toolCalls.length - 1]
         if (matchedTc) {
           matchedTc.result = resultText
-          matchedTc.status = raw?.isError ? 'error' : 'done'
-          matchedTc.policyDecision = raw?.metadata?.policyDecision
+          matchedTc.status = projection?.kind === 'tool_result' && projection.isError ? 'error' : 'done'
+          matchedTc.policyDecision = projection?.kind === 'tool_result' ? projection.policyDecision : undefined
         }
       }
       continue
     }
 
     const role: 'user' | 'agent' = step.role === 'user' ? 'user' : 'agent'
+    const projection = getReplayStepProjection(step)
     messages.push({
       id: `replay-${step.index}`,
       role,
-      content: step.type === 'text' ? (step.raw as string) : step.summary,
+      content: projection?.kind === 'text' ? projection.content : step.summary,
       timestamp: Date.now(),
     })
   }

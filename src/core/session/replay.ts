@@ -17,6 +17,7 @@ import { getLogger } from '../logger/index.js';
 import type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 import { normalizeReplayExport } from '../../shared/replay-export-normalization.js';
 import { deriveReplayEvents as deriveReplayEventTimeline, type ReplayDerivedStepEvent } from '../../shared/replay-event-derivation.js';
+import { getReplayStepProjection } from '../../shared/replay-step-projection.js';
 
 export type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
@@ -39,29 +40,18 @@ export function exportReplay(session: Session): ReplayExport {
             return [];
         }
 
-        const raw = step.raw as {
-            id?: string;
-            metadata?: {
-                policyDecision?: {
-                    decision?: 'allow' | 'deny';
-                    mode?: string;
-                    permissionClass?: string;
-                    reason?: string;
-                };
-            };
-        };
-        const policyDecision = raw.metadata?.policyDecision;
-        if (!raw.id || !policyDecision?.decision || !policyDecision.mode || !policyDecision.permissionClass || !policyDecision.reason) {
+        const projection = getReplayStepProjection(step);
+        if (!projection || projection.kind !== 'tool_result' || !projection.policyDecision) {
             return [];
         }
 
         return [{
-            id: raw.id,
-            tool: toolNamesById.get(raw.id) ?? 'unknown_tool',
-            decision: policyDecision.decision,
-            mode: policyDecision.mode,
-            permissionClass: policyDecision.permissionClass,
-            reason: policyDecision.reason,
+            id: projection.toolCallId,
+            tool: toolNamesById.get(projection.toolCallId) ?? 'unknown_tool',
+            decision: projection.policyDecision.decision,
+            mode: projection.policyDecision.mode,
+            permissionClass: projection.policyDecision.permissionClass,
+            reason: projection.policyDecision.reason,
             timestamp: step.timestamp,
         }];
     });
@@ -158,6 +148,10 @@ function messageToStep(msg: StandardMessage, index: number): ReplayStep {
             role: msg.role,
             type: 'text',
             summary: truncated,
+            projected: {
+                kind: 'text',
+                content: msg.content,
+            },
             raw: msg.content,
         };
     }
@@ -172,6 +166,12 @@ function messageToStep(msg: StandardMessage, index: number): ReplayStep {
             role: msg.role,
             type: 'tool_call',
             summary: `Tool: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)})`,
+            projected: {
+                kind: 'tool_call',
+                toolCallId: tc.id,
+                toolName: tc.name,
+                argumentsText: tc.arguments ? JSON.stringify(tc.arguments) : '',
+            },
             raw: tc,
         };
     }
@@ -187,6 +187,31 @@ function messageToStep(msg: StandardMessage, index: number): ReplayStep {
             role: msg.role,
             type: 'tool_result',
             summary: `Result: ${truncated}`,
+            projected: {
+                kind: 'tool_result',
+                toolCallId: tr.id,
+                content: tr.content,
+                isError: Boolean(tr.isError),
+                policyDecision: (() => {
+                    const decision = tr.metadata && typeof tr.metadata === 'object'
+                        ? (tr.metadata as Record<string, unknown>).policyDecision
+                        : undefined;
+                    if (!decision || typeof decision !== 'object') return undefined;
+                    const record = decision as Record<string, unknown>;
+                    if ((record.decision !== 'allow' && record.decision !== 'deny')
+                        || typeof record.mode !== 'string'
+                        || typeof record.permissionClass !== 'string'
+                        || typeof record.reason !== 'string') {
+                        return undefined;
+                    }
+                    return {
+                        decision: record.decision,
+                        mode: record.mode,
+                        permissionClass: record.permissionClass,
+                        reason: record.reason,
+                    };
+                })(),
+            },
             raw: tr,
         };
     }
@@ -242,7 +267,12 @@ function deriveReplayEvents(
     const resolvedEvents: ReplayDerivedStepEvent[] = [];
 
     for (const step of steps) {
-        if (step.type === 'text') {
+        const projection = getReplayStepProjection(step);
+        if (!projection) {
+            continue;
+        }
+
+        if (projection.kind === 'text') {
             if (step.role === 'tool') {
                 continue;
             }
@@ -250,36 +280,31 @@ function deriveReplayEvents(
                 type: 'agent:text',
                 timestamp: step.timestamp,
                 role: step.role,
-                content: typeof step.raw === 'string' ? step.raw : step.summary,
+                content: projection.content,
             });
             continue;
         }
 
-        if (step.type === 'tool_call') {
-            const raw = step.raw as StandardToolCall;
-            const toolName = raw.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, '');
-            const toolCallId = raw.id ?? `tool-call-${step.index}`;
-            toolNamesById.set(toolCallId, toolName);
+        if (projection.kind === 'tool_call') {
+            toolNamesById.set(projection.toolCallId, projection.toolName);
             resolvedEvents.push({
                 type: 'agent:tool_call',
                 timestamp: step.timestamp,
-                toolCallId,
-                toolName,
-                argumentsText: raw.arguments ? JSON.stringify(raw.arguments) : '',
+                toolCallId: projection.toolCallId,
+                toolName: projection.toolName,
+                argumentsText: projection.argumentsText,
             });
             continue;
         }
 
-        if (step.type === 'tool_result') {
-            const raw = step.raw as StandardToolResult;
-            const toolCallId = raw.id ?? `tool-call-${step.index}`;
+        if (projection.kind === 'tool_result') {
             resolvedEvents.push({
                 type: 'agent:tool_result',
                 timestamp: step.timestamp,
-                toolCallId,
-                toolName: toolNamesById.get(toolCallId) ?? 'unknown_tool',
-                content: raw.content ?? step.summary.replace(/^Result:\s*/, ''),
-                isError: Boolean(raw.isError),
+                toolCallId: projection.toolCallId,
+                toolName: toolNamesById.get(projection.toolCallId) ?? 'unknown_tool',
+                content: projection.content,
+                isError: projection.isError,
             });
         }
     }

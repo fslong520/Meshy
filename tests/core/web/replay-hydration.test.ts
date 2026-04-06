@@ -15,6 +15,12 @@ describe('replay hydration', () => {
                     role: 'assistant',
                     type: 'tool_call',
                     summary: 'Tool: write_note({"filePath":"a.txt"})',
+                    projected: {
+                        kind: 'tool_call',
+                        toolCallId: 'tool-call-1',
+                        toolName: 'write_note',
+                        argumentsText: '{"filePath":"a.txt"}',
+                    },
                     raw: {
                         type: 'tool_call',
                         id: 'tool-call-1',
@@ -28,6 +34,18 @@ describe('replay hydration', () => {
                     role: 'user',
                     type: 'tool_result',
                     summary: 'Result: blocked by policy',
+                    projected: {
+                        kind: 'tool_result',
+                        toolCallId: 'tool-call-1',
+                        content: 'blocked by policy',
+                        isError: true,
+                        policyDecision: {
+                            decision: 'deny',
+                            mode: 'read_only',
+                            permissionClass: 'write',
+                            reason: 'blocked by policy',
+                        },
+                    },
                     raw: {
                         type: 'tool_result',
                         id: 'tool-call-1',
@@ -240,5 +258,76 @@ describe('replay hydration', () => {
 
         expect(hydrated.messages).toEqual([])
         expect(hydrated.policyDecisions).toEqual([])
+    })
+
+    it('hydrates from projected replay steps even when raw payload is absent', () => {
+        const replay: ReplayExport = {
+            sessionId: 'projected-only',
+            exportedAt: '2026-04-06T00:00:00.000Z',
+            totalSteps: 2,
+            steps: [
+                {
+                    index: 0,
+                    timestamp: '2026-04-06T00:00:00.000Z',
+                    role: 'assistant',
+                    type: 'tool_call',
+                    summary: 'Tool: read_note({"filePath":"note.md"})',
+                    projected: {
+                        kind: 'tool_call',
+                        toolCallId: 'tool-call-projected',
+                        toolName: 'read_note',
+                        argumentsText: '{"filePath":"note.md"}',
+                    },
+                    raw: null,
+                },
+                {
+                    index: 1,
+                    timestamp: '2026-04-06T00:00:01.000Z',
+                    role: 'user',
+                    type: 'tool_result',
+                    summary: 'Result: note contents',
+                    projected: {
+                        kind: 'tool_result',
+                        toolCallId: 'tool-call-projected',
+                        content: 'note contents',
+                        isError: false,
+                    },
+                    raw: null,
+                },
+            ],
+            events: [],
+            blackboard: {
+                currentGoal: 'Use projected replay steps',
+                tasks: [],
+                openFiles: [],
+                lastError: null,
+            },
+            policyDecisions: [],
+            runtimeDecisions: [],
+            metrics: {
+                messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+                textMessages: 0,
+                toolCalls: 0,
+                toolResults: 0,
+                totalTextCharacters: 0,
+                uniqueTools: [],
+            },
+            session: {
+                status: 'active',
+                activeAgentId: 'default',
+                messageCount: 2,
+            },
+        };
+
+        const hydrated = hydrateReplayView(replay);
+
+        expect(hydrated.messages).toHaveLength(1);
+        expect(hydrated.messages[0]?.toolCalls?.[0]).toMatchObject({
+            id: 'tool-call-projected',
+            name: 'read_note',
+            args: '{"filePath":"note.md"}',
+            result: 'note contents',
+            status: 'done',
+        });
     })
 });
