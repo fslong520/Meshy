@@ -12,37 +12,11 @@ import {
 } from './store/ws'
 import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
 import { hydrateReplayView } from './store/replay-hydration'
+import type { ReplayExport } from '../../src/shared/replay-contract.js'
 import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
 import { InputArea } from './components/InputArea'
-
-// ─── Replay 类型定义 ───
-
-interface ReplayExport {
-  sessionId: string;
-  totalSteps: number;
-  steps: Array<{
-    index: number;
-    role: 'system' | 'user' | 'assistant';
-    type: 'text' | 'tool_call' | 'tool_result';
-    summary: string;
-    raw: unknown;
-  }>;
-  blackboard: {
-    currentGoal: string;
-    tasks: Array<{ id: string; description: string; status: string }>;
-  };
-  policyDecisions?: Array<{
-    id: string;
-    tool: string;
-    decision: 'allow' | 'deny';
-    mode: string;
-    permissionClass: string;
-    reason: string;
-    timestamp: string;
-  }>
-}
 
 function App() {
   const { connected } = useWebSocket()

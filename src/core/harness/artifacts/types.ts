@@ -1,5 +1,5 @@
 import type { RuntimeDecisionRecord } from '../../session/state.js';
-import type { ReplayExport } from '../../session/replay.js';
+import type { ReplayExport } from '../../../shared/replay-contract.js';
 
 export interface FixtureExpectation {
     finalStatus?: 'passed' | 'failed';

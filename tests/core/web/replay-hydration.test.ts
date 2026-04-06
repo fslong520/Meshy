@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { ReplayExport } from '../../../src/shared/replay-contract.js';
 import { hydrateReplayView } from '../../../web/src/store/replay-hydration.js';
 
 describe('replay hydration', () => {
     it('hydrates tool policy badges and timeline from replay payloads', () => {
-        const replay: Parameters<typeof hydrateReplayView>[0] = {
+        const replay: ReplayExport = {
             sessionId: 'session-1',
             totalSteps: 2,
             steps: [
@@ -68,7 +69,7 @@ describe('replay hydration', () => {
     });
 
     it('prefers unified replay events when present', () => {
-        const replay: Parameters<typeof hydrateReplayView>[0] = {
+        const replay: ReplayExport = {
             sessionId: 'session-2',
             totalSteps: 1,
             steps: [
@@ -141,7 +142,7 @@ describe('replay hydration', () => {
     });
 
     it('supports legacy non-prefixed replay event names', () => {
-        const replay: Parameters<typeof hydrateReplayView>[0] = {
+        const replay: ReplayExport = {
             sessionId: 'session-legacy-events',
             totalSteps: 0,
             steps: [],

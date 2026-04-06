@@ -1,99 +1,11 @@
 import type { ChatMessage, PolicyDecisionEvent } from './ws'
+import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/replay-contract.js'
 
-interface ReplayStep {
-  index: number
-  role: 'system' | 'user' | 'assistant'
-  type: 'text' | 'tool_call' | 'tool_result'
-  summary: string
-  raw: unknown
-}
+type ReplayInputEvent = ReplayEvent | (ReplayEvent & { type: 'text' | 'tool_call' | 'tool_result' | 'policy_decision' })
 
-interface ReplayExport {
-  sessionId: string
-  totalSteps: number
-  steps: ReplayStep[]
-  events?: Array<
-    | {
-        type: 'agent:text' | 'text'
-        timestamp: string
-        role: 'user' | 'assistant' | 'system'
-        content: string
-      }
-    | {
-        type: 'agent:tool_call' | 'tool_call'
-        timestamp: string
-        toolCallId: string
-        toolName: string
-        argumentsText: string
-      }
-    | {
-        type: 'agent:tool_result' | 'tool_result'
-        timestamp: string
-        toolCallId: string
-        toolName: string
-        content: string
-        isError: boolean
-      }
-    | {
-        type: 'agent:policy_decision' | 'policy_decision'
-        timestamp: string
-        toolCallId: string
-        toolName: string
-        decision: 'allow' | 'deny'
-        mode: string
-        permissionClass: string
-        reason: string
-      }
-  >
-  blackboard: {
-    currentGoal: string
-    tasks: Array<{ id: string; description: string; status: string }>
-  }
-  policyDecisions?: Array<{
-    id: string
-    tool: string
-    decision: 'allow' | 'deny'
-    mode: string
-    permissionClass: string
-    reason: string
-    timestamp: string
-  }>
-}
+type NormalizedReplayEvent = ReplayEvent
 
-type NormalizedReplayEvent =
-  | {
-      type: 'agent:text'
-      timestamp: string
-      role: 'user' | 'assistant' | 'system'
-      content: string
-    }
-  | {
-      type: 'agent:tool_call'
-      timestamp: string
-      toolCallId: string
-      toolName: string
-      argumentsText: string
-    }
-  | {
-      type: 'agent:tool_result'
-      timestamp: string
-      toolCallId: string
-      toolName: string
-      content: string
-      isError: boolean
-    }
-  | {
-      type: 'agent:policy_decision'
-      timestamp: string
-      toolCallId: string
-      toolName: string
-      decision: 'allow' | 'deny'
-      mode: string
-      permissionClass: string
-      reason: string
-    }
-
-function normalizeReplayEvents(events: ReplayExport['events']): NormalizedReplayEvent[] {
+function normalizeReplayEvents(events: ReadonlyArray<ReplayInputEvent> | undefined): NormalizedReplayEvent[] {
   const normalized: NormalizedReplayEvent[] = []
 
   for (const event of events || []) {

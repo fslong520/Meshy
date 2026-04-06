@@ -1,4 +1,4 @@
-import type { ReplayExport } from '../../session/replay.js';
+import type { ReplayExport } from '../../../shared/replay-contract.js';
 import type { FixtureExpectation, ScenarioFixture } from '../artifacts/types.js';
 
 export class FixtureRecorder {

@@ -14,97 +14,9 @@ import path from 'path';
 import { RuntimeDecisionRecord, Session } from './state.js';
 import { StandardMessage, StandardToolCall, StandardToolResult } from '../llm/provider.js';
 import { getLogger } from '../logger/index.js';
+import type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
-// ─── Replay Step 定义 ───
-export interface ReplayStep {
-    index: number;
-    timestamp: string;
-    role: 'system' | 'user' | 'assistant' | 'tool';
-    type: 'text' | 'tool_call' | 'tool_result';
-    /** 消息文本或工具调用摘要 */
-    summary: string;
-    /** 完整原始内容 */
-    raw: unknown;
-}
-
-export type ReplayEvent =
-    | {
-        type: 'agent:text';
-        timestamp: string;
-        role: 'user' | 'assistant' | 'system';
-        content: string;
-    }
-    | {
-        type: 'agent:tool_call';
-        timestamp: string;
-        toolCallId: string;
-        toolName: string;
-        argumentsText: string;
-    }
-    | {
-        type: 'agent:tool_result';
-        timestamp: string;
-        toolCallId: string;
-        toolName: string;
-        content: string;
-        isError: boolean;
-    }
-    | {
-        type: 'agent:policy_decision';
-        timestamp: string;
-        toolCallId: string;
-        toolName: string;
-        decision: 'allow' | 'deny';
-        mode: string;
-        permissionClass: string;
-        reason: string;
-    };
-
-// ─── Replay 完整导出 ───
-export interface ReplayMetrics {
-    messageCountByRole: {
-        system: number;
-        user: number;
-        assistant: number;
-        tool: number;
-    };
-    textMessages: number;
-    toolCalls: number;
-    toolResults: number;
-    totalTextCharacters: number;
-    uniqueTools: string[];
-}
-
-export interface ReplayExport {
-    sessionId: string;
-    exportedAt: string;
-    totalSteps: number;
-    steps: ReplayStep[];
-    events: ReplayEvent[];
-    runtimeDecisions: RuntimeDecisionRecord[];
-    policyDecisions: Array<{
-        id: string;
-        tool: string;
-        decision: 'allow' | 'deny';
-        mode: string;
-        permissionClass: string;
-        reason: string;
-        timestamp: string;
-    }>;
-    metrics: ReplayMetrics;
-    blackboard: {
-        currentGoal: string;
-        tasks: Array<{ id: string; description: string; status: string }>;
-        openFiles: string[];
-        lastError: string | null;
-    };
-    session: {
-        title?: string;
-        status: string;
-        activeAgentId: string;
-        messageCount: number;
-    };
-}
+export type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
 /**
  * 将 Session 导出为结构化的 Replay 格式
