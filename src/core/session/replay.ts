@@ -15,6 +15,7 @@ import { RuntimeDecisionRecord, Session } from './state.js';
 import { StandardMessage, StandardToolCall, StandardToolResult } from '../llm/provider.js';
 import { getLogger } from '../logger/index.js';
 import type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
+import { normalizeReplayEvents } from '../../shared/replay-normalization.js';
 
 export type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
@@ -268,66 +269,6 @@ function normalizeReplay(value: any): ReplayExport {
             messageCount: value.session?.messageCount ?? steps.length,
         },
     };
-}
-
-function normalizeReplayEvents(events: unknown[]): ReplayEvent[] {
-    const normalized: ReplayEvent[] = [];
-    for (const rawEvent of events) {
-        if (!rawEvent || typeof rawEvent !== 'object') {
-            continue;
-        }
-        const event = rawEvent as Record<string, unknown>;
-        const type = typeof event.type === 'string' ? event.type : '';
-
-        if (type === 'agent:text' || type === 'text') {
-            normalized.push({
-                type: 'agent:text',
-                timestamp: String(event.timestamp ?? new Date().toISOString()),
-                role: event.role === 'assistant' || event.role === 'system' ? event.role : 'user',
-                content: String(event.content ?? ''),
-            });
-            continue;
-        }
-
-        if (type === 'agent:tool_call' || type === 'tool_call') {
-            normalized.push({
-                type: 'agent:tool_call',
-                timestamp: String(event.timestamp ?? new Date().toISOString()),
-                toolCallId: String(event.toolCallId ?? ''),
-                toolName: String(event.toolName ?? 'unknown_tool'),
-                argumentsText: String(event.argumentsText ?? ''),
-            });
-            continue;
-        }
-
-        if (type === 'agent:tool_result' || type === 'tool_result') {
-            normalized.push({
-                type: 'agent:tool_result',
-                timestamp: String(event.timestamp ?? new Date().toISOString()),
-                toolCallId: String(event.toolCallId ?? ''),
-                toolName: String(event.toolName ?? 'unknown_tool'),
-                content: String(event.content ?? ''),
-                isError: Boolean(event.isError),
-            });
-            continue;
-        }
-
-        if (type === 'agent:policy_decision' || type === 'policy_decision') {
-            const decision = event.decision === 'deny' ? 'deny' : 'allow';
-            normalized.push({
-                type: 'agent:policy_decision',
-                timestamp: String(event.timestamp ?? new Date().toISOString()),
-                toolCallId: String(event.toolCallId ?? ''),
-                toolName: String(event.toolName ?? 'unknown_tool'),
-                decision,
-                mode: String(event.mode ?? 'standard'),
-                permissionClass: String(event.permissionClass ?? 'unknown'),
-                reason: String(event.reason ?? ''),
-            });
-        }
-
-    }
-    return normalized;
 }
 
 function deriveReplayEvents(

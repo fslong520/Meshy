@@ -1,63 +1,8 @@
 import type { ChatMessage, PolicyDecisionEvent } from './ws'
 import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/replay-contract.js'
-
-type ReplayInputEvent = ReplayEvent | (ReplayEvent & { type: 'text' | 'tool_call' | 'tool_result' | 'policy_decision' })
+import { normalizeReplayEvents } from '../../../src/shared/replay-normalization.js'
 
 type NormalizedReplayEvent = ReplayEvent
-
-function normalizeReplayEvents(events: ReadonlyArray<ReplayInputEvent> | undefined): NormalizedReplayEvent[] {
-  const normalized: NormalizedReplayEvent[] = []
-
-  for (const event of events || []) {
-    if (event.type === 'agent:text' || event.type === 'text') {
-      normalized.push({
-        type: 'agent:text',
-        timestamp: event.timestamp,
-        role: event.role,
-        content: event.content,
-      })
-      continue
-    }
-
-    if (event.type === 'agent:tool_call' || event.type === 'tool_call') {
-      normalized.push({
-        type: 'agent:tool_call',
-        timestamp: event.timestamp,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        argumentsText: event.argumentsText,
-      })
-      continue
-    }
-
-    if (event.type === 'agent:tool_result' || event.type === 'tool_result') {
-      normalized.push({
-        type: 'agent:tool_result',
-        timestamp: event.timestamp,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        content: event.content,
-        isError: event.isError,
-      })
-      continue
-    }
-
-    if (event.type === 'agent:policy_decision' || event.type === 'policy_decision') {
-      normalized.push({
-        type: 'agent:policy_decision',
-        timestamp: event.timestamp,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        decision: event.decision,
-        mode: event.mode,
-        permissionClass: event.permissionClass,
-        reason: event.reason,
-      })
-    }
-  }
-
-  return normalized
-}
 
 function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
   const messages: ChatMessage[] = []
@@ -80,7 +25,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
     return last
   }
 
-  for (const event of normalizeReplayEvents(replay.events)) {
+  for (const event of normalizeReplayEvents(replay.events) as NormalizedReplayEvent[]) {
     if (event.type === 'agent:text') {
       if (event.role === 'system') continue
       messages.push({
