@@ -16,6 +16,7 @@ import { StandardMessage, StandardToolCall, StandardToolResult } from '../llm/pr
 import { getLogger } from '../logger/index.js';
 import type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 import { normalizeReplayExport } from '../../shared/replay-export-normalization.js';
+import { deriveReplayEvents as deriveReplayEventTimeline, type ReplayDerivedStepEvent } from '../../shared/replay-event-derivation.js';
 
 export type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
@@ -238,14 +239,14 @@ function deriveReplayEvents(
     policyDecisions: ReplayExport['policyDecisions'],
 ): ReplayEvent[] {
     const toolNamesById = new Map<string, string>();
-    const events: ReplayEvent[] = [];
+    const resolvedEvents: ReplayDerivedStepEvent[] = [];
 
     for (const step of steps) {
         if (step.type === 'text') {
             if (step.role === 'tool') {
                 continue;
             }
-            events.push({
+            resolvedEvents.push({
                 type: 'agent:text',
                 timestamp: step.timestamp,
                 role: step.role,
@@ -259,7 +260,7 @@ function deriveReplayEvents(
             const toolName = raw.name ?? step.summary.replace(/^Tool:\s*/, '').replace(/\(.*$/, '');
             const toolCallId = raw.id ?? `tool-call-${step.index}`;
             toolNamesById.set(toolCallId, toolName);
-            events.push({
+            resolvedEvents.push({
                 type: 'agent:tool_call',
                 timestamp: step.timestamp,
                 toolCallId,
@@ -272,7 +273,7 @@ function deriveReplayEvents(
         if (step.type === 'tool_result') {
             const raw = step.raw as StandardToolResult;
             const toolCallId = raw.id ?? `tool-call-${step.index}`;
-            events.push({
+            resolvedEvents.push({
                 type: 'agent:tool_result',
                 timestamp: step.timestamp,
                 toolCallId,
@@ -283,20 +284,7 @@ function deriveReplayEvents(
         }
     }
 
-    for (const decision of policyDecisions) {
-        events.push({
-            type: 'agent:policy_decision',
-            timestamp: decision.timestamp,
-            toolCallId: decision.id,
-            toolName: decision.tool,
-            decision: decision.decision,
-            mode: decision.mode,
-            permissionClass: decision.permissionClass,
-            reason: decision.reason,
-        });
-    }
-
-    return events.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    return deriveReplayEventTimeline(resolvedEvents, policyDecisions);
 }
 
 /**
