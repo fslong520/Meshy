@@ -1,6 +1,7 @@
 import type { ChatMessage, PolicyDecisionEvent } from './ws'
 import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/replay-contract.js'
 import { normalizeReplayEvents } from '../../../src/shared/replay-normalization.js'
+import { normalizeReplayExport } from '../../../src/shared/replay-export-normalization.js'
 
 type NormalizedReplayEvent = ReplayEvent
 
@@ -166,13 +167,15 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
 }
 
 export function hydrateReplayView(replay: ReplayExport): { messages: ChatMessage[]; policyDecisions: PolicyDecisionEvent[] } {
-  if (Array.isArray(replay.events) && replay.events.length > 0) {
-    return eventReplayToMessages(replay)
+  const normalizedReplay = normalizeReplayExport(replay)
+
+  if (Array.isArray(normalizedReplay.events) && normalizedReplay.events.length > 0) {
+    return eventReplayToMessages(normalizedReplay)
   }
 
   return {
-    messages: replayToMessages(replay),
-    policyDecisions: (replay.policyDecisions || []).map((event) => ({
+    messages: replayToMessages(normalizedReplay),
+    policyDecisions: normalizedReplay.policyDecisions.map((event) => ({
       ...event,
       timestamp: Date.parse(event.timestamp) || Date.now(),
     })),

@@ -8,9 +8,11 @@ const read = (relativePath: string) => fs.readFileSync(path.join(repoRoot, relat
 describe('shared replay normalization adoption', () => {
     it('uses the shared replay normalizer from core and web entrypoints', () => {
         const coreSource = read('src/core/session/replay.ts');
+        const exportNormalizerSource = read('src/shared/replay-export-normalization.ts');
         const webSource = read('web/src/store/replay-hydration.ts');
 
-        expect(coreSource).toContain("from '../../shared/replay-normalization.js'");
+        expect(coreSource).toContain("from '../../shared/replay-export-normalization.js'");
+        expect(exportNormalizerSource).toContain("from './replay-normalization.js'");
         expect(coreSource).not.toContain('function normalizeReplayEvents(');
 
         expect(webSource).toContain("from '../../../src/shared/replay-normalization.js'");

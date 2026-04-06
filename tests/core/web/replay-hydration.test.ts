@@ -6,10 +6,12 @@ describe('replay hydration', () => {
     it('hydrates tool policy badges and timeline from replay payloads', () => {
         const replay: ReplayExport = {
             sessionId: 'session-1',
+            exportedAt: '2026-04-04T00:00:00.000Z',
             totalSteps: 2,
             steps: [
                 {
                     index: 0,
+                    timestamp: '2026-04-04T00:00:00.000Z',
                     role: 'assistant',
                     type: 'tool_call',
                     summary: 'Tool: write_note({"filePath":"a.txt"})',
@@ -22,6 +24,7 @@ describe('replay hydration', () => {
                 },
                 {
                     index: 1,
+                    timestamp: '2026-04-04T00:00:01.000Z',
                     role: 'user',
                     type: 'tool_result',
                     summary: 'Result: blocked by policy',
@@ -41,9 +44,12 @@ describe('replay hydration', () => {
                     },
                 },
             ],
+            events: [],
             blackboard: {
                 currentGoal: 'Keep audit context during replay',
                 tasks: [],
+                openFiles: [],
+                lastError: null,
             },
             policyDecisions: [
                 {
@@ -56,6 +62,20 @@ describe('replay hydration', () => {
                     timestamp: '2026-04-04T00:00:00.000Z',
                 },
             ],
+            runtimeDecisions: [],
+            metrics: {
+                messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+                textMessages: 0,
+                toolCalls: 0,
+                toolResults: 0,
+                totalTextCharacters: 0,
+                uniqueTools: [],
+            },
+            session: {
+                status: 'active',
+                activeAgentId: 'default',
+                messageCount: 2,
+            },
         };
 
         const hydrated = hydrateReplayView(replay);
@@ -71,10 +91,12 @@ describe('replay hydration', () => {
     it('prefers unified replay events when present', () => {
         const replay: ReplayExport = {
             sessionId: 'session-2',
+            exportedAt: '2026-04-04T00:00:00.000Z',
             totalSteps: 1,
             steps: [
                 {
                     index: 0,
+                    timestamp: '2026-04-04T00:00:00.000Z',
                     role: 'user',
                     type: 'text',
                     summary: 'legacy hello',
@@ -117,8 +139,24 @@ describe('replay hydration', () => {
             blackboard: {
                 currentGoal: 'Use replay events',
                 tasks: [],
+                openFiles: [],
+                lastError: null,
             },
             policyDecisions: [],
+            runtimeDecisions: [],
+            metrics: {
+                messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+                textMessages: 0,
+                toolCalls: 0,
+                toolResults: 0,
+                totalTextCharacters: 0,
+                uniqueTools: [],
+            },
+            session: {
+                status: 'active',
+                activeAgentId: 'default',
+                messageCount: 1,
+            },
         };
 
         const hydrated = hydrateReplayView(replay);
@@ -142,8 +180,9 @@ describe('replay hydration', () => {
     });
 
     it('supports legacy non-prefixed replay event names', () => {
-        const replay: ReplayExport = {
+        const replay = {
             sessionId: 'session-legacy-events',
+            exportedAt: '2026-04-04T00:00:00.000Z',
             totalSteps: 0,
             steps: [],
             events: [
@@ -164,9 +203,25 @@ describe('replay hydration', () => {
             blackboard: {
                 currentGoal: 'legacy replay compatibility',
                 tasks: [],
+                openFiles: [],
+                lastError: null,
             },
+            runtimeDecisions: [],
             policyDecisions: [],
-        };
+            metrics: {
+                messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
+                textMessages: 0,
+                toolCalls: 0,
+                toolResults: 0,
+                totalTextCharacters: 0,
+                uniqueTools: [],
+            },
+            session: {
+                status: 'active',
+                activeAgentId: 'default',
+                messageCount: 0,
+            },
+        } as never;
 
         const hydrated = hydrateReplayView(replay);
 
@@ -174,4 +229,16 @@ describe('replay hydration', () => {
         expect(hydrated.messages[0]?.content).toBe('legacy event text');
         expect(hydrated.messages[1]?.toolCalls?.[0]?.id).toBe('tool-call-legacy');
     });
+
+    it('tolerates replay payloads with missing export-level defaults', () => {
+        const hydrated = hydrateReplayView({
+            sessionId: 'legacy-minimal',
+            exportedAt: '2026-04-05T00:00:00.000Z',
+            steps: [],
+            totalSteps: 0,
+        } as never)
+
+        expect(hydrated.messages).toEqual([])
+        expect(hydrated.policyDecisions).toEqual([])
+    })
 });

@@ -15,7 +15,7 @@ import { RuntimeDecisionRecord, Session } from './state.js';
 import { StandardMessage, StandardToolCall, StandardToolResult } from '../llm/provider.js';
 import { getLogger } from '../logger/index.js';
 import type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
-import { normalizeReplayEvents } from '../../shared/replay-normalization.js';
+import { normalizeReplayExport } from '../../shared/replay-export-normalization.js';
 
 export type { ReplayEvent, ReplayExport, ReplayMetrics, ReplayStep } from '../../shared/replay-contract.js';
 
@@ -227,48 +227,10 @@ export function saveReplay(
 export function loadReplay(filePath: string): ReplayExport | null {
     try {
         const raw = fs.readFileSync(filePath, 'utf8');
-        return normalizeReplay(JSON.parse(raw));
+        return normalizeReplayExport(JSON.parse(raw), { deriveEvents: deriveReplayEvents });
     } catch {
         return null;
     }
-}
-
-function normalizeReplay(value: any): ReplayExport {
-    const steps = Array.isArray(value.steps) ? value.steps : [];
-    const policyDecisions = Array.isArray(value.policyDecisions) ? value.policyDecisions : [];
-    const events = Array.isArray(value.events)
-        ? normalizeReplayEvents(value.events)
-        : deriveReplayEvents(steps, policyDecisions);
-
-    return {
-        sessionId: value.sessionId,
-        exportedAt: value.exportedAt,
-        totalSteps: value.totalSteps ?? steps.length,
-        steps,
-        events,
-        runtimeDecisions: Array.isArray(value.runtimeDecisions) ? value.runtimeDecisions : [],
-        policyDecisions,
-        metrics: value.metrics ?? {
-            messageCountByRole: { system: 0, user: 0, assistant: 0, tool: 0 },
-            textMessages: 0,
-            toolCalls: 0,
-            toolResults: 0,
-            totalTextCharacters: 0,
-            uniqueTools: [],
-        },
-        blackboard: {
-            currentGoal: value.blackboard?.currentGoal ?? '',
-            tasks: Array.isArray(value.blackboard?.tasks) ? value.blackboard.tasks : [],
-            openFiles: Array.isArray(value.blackboard?.openFiles) ? value.blackboard.openFiles : [],
-            lastError: value.blackboard?.lastError ?? null,
-        },
-        session: {
-            title: value.session?.title,
-            status: value.session?.status ?? 'active',
-            activeAgentId: value.session?.activeAgentId ?? 'default',
-            messageCount: value.session?.messageCount ?? steps.length,
-        },
-    };
 }
 
 function deriveReplayEvents(
@@ -341,7 +303,7 @@ function deriveReplayEvents(
  * 格式化 Replay 为可读的文本输出（用于 CLI 展示）
  */
 export function formatReplayText(replay: ReplayExport): string {
-    const normalized = normalizeReplay(replay);
+    const normalized = normalizeReplayExport(replay, { deriveEvents: deriveReplayEvents });
     const lines: string[] = [
         `Session Replay: ${normalized.sessionId}`,
         `Exported: ${normalized.exportedAt}`,
@@ -359,15 +321,15 @@ export function formatReplayText(replay: ReplayExport): string {
         '─'.repeat(60),
     ];
 
-    for (const step of replay.steps) {
+    for (const step of normalized.steps) {
         const roleTag = step.role.toUpperCase().padEnd(10);
         const typeTag = step.type.padEnd(12);
         lines.push(`[${String(step.index).padStart(3)}] ${roleTag} ${typeTag} ${step.summary}`);
     }
 
-    if (replay.blackboard.tasks.length > 0) {
+    if (normalized.blackboard.tasks.length > 0) {
         lines.push('', '─'.repeat(60), 'Tasks:');
-        for (const t of replay.blackboard.tasks) {
+        for (const t of normalized.blackboard.tasks) {
             lines.push(`  [${t.status}] ${t.id}: ${t.description}`);
         }
     }
