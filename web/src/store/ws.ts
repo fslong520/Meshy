@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { sortPolicyDecisionsNewestFirst } from './policy-decision-ui.js';
 
 // ─── RPC 消息协议（与后端 DaemonServer 一致）───
 
@@ -115,8 +116,11 @@ export function ingestPolicyDecisionEvent(msg: RpcMessage): PolicyDecisionEvent 
     if (!parsed) return null;
 
     policyDecisionTimeline.push(parsed);
+    const sorted = sortPolicyDecisionsNewestFirst(policyDecisionTimeline);
+    policyDecisionTimeline.length = 0;
+    policyDecisionTimeline.push(...sorted);
     if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
-        policyDecisionTimeline.splice(0, policyDecisionTimeline.length - POLICY_TIMELINE_LIMIT);
+        policyDecisionTimeline.splice(POLICY_TIMELINE_LIMIT);
     }
     return parsed;
 }
@@ -127,9 +131,9 @@ export function getPolicyDecisionTimeline(): PolicyDecisionEvent[] {
 
 export function replacePolicyDecisionTimeline(events: PolicyDecisionEvent[]): void {
     policyDecisionTimeline.length = 0;
-    policyDecisionTimeline.push(...events.map((item) => ({ ...item })));
+    policyDecisionTimeline.push(...sortPolicyDecisionsNewestFirst(events.map((item) => ({ ...item }))));
     if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
-        policyDecisionTimeline.splice(0, policyDecisionTimeline.length - POLICY_TIMELINE_LIMIT);
+        policyDecisionTimeline.splice(POLICY_TIMELINE_LIMIT);
     }
 }
 

@@ -64,4 +64,60 @@ describe('ws policy decision timeline', () => {
         expect(timeline[0]?.id).toBe('tool-call-1');
         expect(timeline[0]?.decision).toBe('deny');
     });
+
+    it('stores ingested events sorted newest-first by timestamp', () => {
+        clearPolicyDecisionTimeline();
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'older',
+                tool: 'read_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'older event',
+                timestamp: '2026-04-08T00:00:01.000Z',
+            },
+        });
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'newer',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'newer event',
+                timestamp: '2026-04-08T00:00:03.000Z',
+            },
+        });
+
+        const timeline = getPolicyDecisionTimeline();
+        expect(timeline.map((event) => event.id)).toEqual(['newer', 'older']);
+    });
+
+    it('keeps the newest 200 events by timestamp when replacing the timeline', () => {
+        clearPolicyDecisionTimeline();
+
+        replacePolicyDecisionTimeline(
+            Array.from({ length: 205 }, (_, index) => ({
+                id: `event-${index}`,
+                tool: `tool-${index}`,
+                decision: index % 2 === 0 ? 'allow' : 'deny',
+                mode: 'read_only',
+                permissionClass: index % 2 === 0 ? 'read' : 'write',
+                reason: `reason-${index}`,
+                timestamp: index,
+            })),
+        );
+
+        const timeline = getPolicyDecisionTimeline();
+        expect(timeline).toHaveLength(200);
+        expect(timeline[0]?.id).toBe('event-204');
+        expect(timeline[199]?.id).toBe('event-5');
+    });
 });
