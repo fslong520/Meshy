@@ -1474,6 +1474,7 @@ export class TaskEngine {
                     mode: this.toolRegistry.getPolicyMode(),
                     permissionClass: 'exec',
                     reason: 'sandbox denied action',
+                    timestamp: new Date().toISOString(),
                 },
             });
             // Throw an error that stops the inner execution and signals the LLM loop to stop retrying immediately

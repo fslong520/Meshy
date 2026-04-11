@@ -95,6 +95,7 @@ function parsePolicyDecisionPayload(msg: RpcMessage): PolicyDecisionEvent | null
     const mode = typeof data.mode === 'string' ? data.mode : '';
     const permissionClass = typeof data.permissionClass === 'string' ? data.permissionClass : '';
     const reason = typeof data.reason === 'string' ? data.reason : '';
+    const parsedTimestamp = typeof data.timestamp === 'string' ? Date.parse(data.timestamp) : NaN;
     if (!id || !tool || !decision || !mode || !permissionClass || !reason) return null;
 
     return {
@@ -104,7 +105,7 @@ function parsePolicyDecisionPayload(msg: RpcMessage): PolicyDecisionEvent | null
         mode,
         permissionClass,
         reason,
-        timestamp: Date.now(),
+        timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
     };
 }
 

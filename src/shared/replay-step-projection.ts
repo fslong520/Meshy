@@ -6,7 +6,8 @@ const isPolicyDecisionSnapshot = (value: unknown): value is ReplayStepPolicyDeci
     return (record.decision === 'allow' || record.decision === 'deny')
         && typeof record.mode === 'string'
         && typeof record.permissionClass === 'string'
-        && typeof record.reason === 'string';
+        && typeof record.reason === 'string'
+        && (record.timestamp === undefined || typeof record.timestamp === 'string');
 };
 
 export const getReplayStepProjection = (step: ReplayStep): ReplayStepProjection | null => {

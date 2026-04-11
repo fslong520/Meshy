@@ -52,7 +52,7 @@ export function exportReplay(session: Session): ReplayExport {
             mode: projection.policyDecision.mode,
             permissionClass: projection.policyDecision.permissionClass,
             reason: projection.policyDecision.reason,
-            timestamp: step.timestamp,
+            timestamp: projection.policyDecision.timestamp ?? step.timestamp,
         }];
     });
     const events = deriveReplayEvents(steps, policyDecisions);
@@ -209,6 +209,7 @@ function messageToStep(msg: StandardMessage, index: number): ReplayStep {
                         mode: record.mode,
                         permissionClass: record.permissionClass,
                         reason: record.reason,
+                        timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
                     };
                 })(),
             },

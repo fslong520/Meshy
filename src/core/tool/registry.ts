@@ -36,6 +36,7 @@ interface ToolPolicyDecision {
     mode: ToolPolicyMode;
     permissionClass: ToolPermissionClass;
     reason: string;
+    timestamp: string;
 }
 
 export class ToolRegistry {
@@ -160,6 +161,7 @@ export class ToolRegistry {
             reason: this.policyMode === 'read_only'
                 ? 'permissionClass read is allowed in read-only mode'
                 : 'policy mode allows tool execution',
+            timestamp: new Date().toISOString(),
         };
 
         const timeoutMs = tool.manifest.timeoutMs;
@@ -244,6 +246,7 @@ export class ToolRegistry {
                     mode: this.policyMode,
                     permissionClass: tool.manifest.permissionClass,
                     reason: `permissionClass ${tool.manifest.permissionClass} is blocked in read-only mode`,
+                    timestamp: new Date().toISOString(),
                 } satisfies ToolPolicyDecision,
             },
         };

@@ -13,6 +13,7 @@ export interface ReplayStepPolicyDecisionSnapshot {
     mode: string;
     permissionClass: string;
     reason: string;
+    timestamp?: string;
 }
 
 export type ReplayStepProjection =

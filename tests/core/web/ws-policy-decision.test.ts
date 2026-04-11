@@ -20,6 +20,7 @@ describe('ws policy decision timeline', () => {
                 mode: 'read_only',
                 permissionClass: 'read',
                 reason: 'permissionClass read is allowed in read-only mode',
+                timestamp: '2026-04-08T00:00:07.000Z',
             },
         };
 
@@ -29,6 +30,7 @@ describe('ws policy decision timeline', () => {
         expect(ingested?.tool).toBe('read_note');
         expect(timeline).toHaveLength(1);
         expect(timeline[0]?.decision).toBe('allow');
+        expect(timeline[0]?.timestamp).toBe(Date.parse('2026-04-08T00:00:07.000Z'));
     });
 
     it('ignores non-policy events and invalid payloads', () => {
