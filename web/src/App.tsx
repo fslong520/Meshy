@@ -4,7 +4,10 @@ import {
   useEvent,
   sendRpc,
   clearPolicyDecisionTimeline,
+  clearPolicyDecisionHistory,
+  getPolicyDecisionHistory,
   getPolicyDecisionTimeline,
+  replacePolicyDecisionHistory,
   replacePolicyDecisionTimeline,
   type ChatMessage,
   type RpcMessage,
@@ -29,6 +32,7 @@ function App() {
   const [agentStreaming, setAgentStreaming] = useState(false)
   const [activeSession, setActiveSession] = useState<{ id: string; title?: string } | null>(null)
   const [policyDecisions, setPolicyDecisions] = useState<PolicyDecisionEvent[]>(() => getPolicyDecisionTimeline())
+  const [policyDecisionHistory, setPolicyDecisionHistory] = useState<PolicyDecisionEvent[]>(() => getPolicyDecisionHistory())
 
   // 确保存在当前轮次的 Agent 消息容器，用于挂载 toolCalls / 错误等状态
   const ensureAgentContainer = useCallback((prev: ChatMessage[]): { list: ChatMessage[]; agent: ChatMessage } => {
@@ -94,7 +98,9 @@ function App() {
       setBbGoal('')
       setBbTasks([])
       clearPolicyDecisionTimeline()
+      clearPolicyDecisionHistory()
       setPolicyDecisions([])
+      setPolicyDecisionHistory([])
     } else if (data.sessionId !== activeSession?.id) {
       handleSessionSwitch(data.sessionId)
     }
@@ -224,6 +230,7 @@ function App() {
 
   useEvent('agent:policy_decision', () => {
     setPolicyDecisions(getPolicyDecisionTimeline())
+    setPolicyDecisionHistory(getPolicyDecisionHistory())
   })
 
   useEvent('agent:policy_decision', (msg: RpcMessage) => {
@@ -333,14 +340,18 @@ function App() {
         setBbGoal(res.replay.blackboard.currentGoal)
         setBbTasks(res.replay.blackboard.tasks)
         replacePolicyDecisionTimeline(hydrated.policyDecisions)
+        replacePolicyDecisionHistory(hydrated.policyDecisions)
         setPolicyDecisions(getPolicyDecisionTimeline())
+        setPolicyDecisionHistory(getPolicyDecisionHistory())
       } else {
         // 新 session，清空消息
         setMessages([])
         setBbGoal('')
         setBbTasks([])
         clearPolicyDecisionTimeline()
+        clearPolicyDecisionHistory()
         setPolicyDecisions([])
+        setPolicyDecisionHistory([])
       }
     })
   }, [])
@@ -357,7 +368,9 @@ function App() {
             setMessages([])
             setActiveSession(null)
             clearPolicyDecisionTimeline()
+            clearPolicyDecisionHistory()
             setPolicyDecisions([])
+            setPolicyDecisionHistory([])
           }
         }
       })
@@ -373,7 +386,9 @@ function App() {
           const hydrated = hydrateReplayView(res.replay)
           setMessages(hydrated.messages)
           replacePolicyDecisionTimeline(hydrated.policyDecisions)
+          replacePolicyDecisionHistory(hydrated.policyDecisions)
           setPolicyDecisions(getPolicyDecisionTimeline())
+          setPolicyDecisionHistory(getPolicyDecisionHistory())
         }
       })
     }
@@ -400,7 +415,7 @@ function App() {
           onToggleBb={() => setBbOpen(!bbOpen)}
         />
       </div>
-      <RightPanel policyDecisions={policyDecisions} />
+      <RightPanel policyDecisions={policyDecisions} policyDecisionHistory={policyDecisionHistory} />
 
       {/* Blackboard Drawer (no more floating toggle – it's in InputArea toolbar) */}
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>

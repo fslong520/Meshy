@@ -3,7 +3,7 @@ import { sendRpc, type PolicyDecisionEvent } from '../store/ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock, PreBlock } from './CodeBlock'
-import { PolicyDecisionPanel } from './PolicyDecisionPanel'
+import { PolicyDecisionPanel, type PolicyDecisionPanelMode } from './PolicyDecisionPanel'
 
 type TabName = 'skills' | 'mcp' | 'soul' | 'plugins' | 'messaging';
 
@@ -17,14 +17,24 @@ const TABS: { key: TabName; label: string }[] = [
 
 interface RightPanelProps {
     policyDecisions: PolicyDecisionEvent[]
+    policyDecisionHistory: PolicyDecisionEvent[]
 }
 
-export function RightPanel({ policyDecisions }: RightPanelProps) {
+export function RightPanel({ policyDecisions, policyDecisionHistory }: RightPanelProps) {
     const [activeTab, setActiveTab] = useState<TabName>('skills')
+    const [policyDecisionMode, setPolicyDecisionMode] = useState<PolicyDecisionPanelMode>('current')
+
+    const visiblePolicyDecisions = policyDecisionMode === 'audit'
+        ? policyDecisionHistory
+        : policyDecisions
 
     return (
         <div className="right-panel">
-            <PolicyDecisionPanel events={policyDecisions} />
+            <PolicyDecisionPanel
+                events={visiblePolicyDecisions}
+                mode={policyDecisionMode}
+                onModeChange={setPolicyDecisionMode}
+            />
 
             {/* Tabs */}
             <div className="right-tabs">

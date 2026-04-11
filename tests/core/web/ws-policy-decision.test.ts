@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
     clearPolicyDecisionTimeline,
+    clearPolicyDecisionHistory,
     getPolicyDecisionTimeline,
+    getPolicyDecisionHistory,
     ingestPolicyDecisionEvent,
+    replacePolicyDecisionHistory,
     replacePolicyDecisionTimeline,
     type RpcMessage,
 } from '../../../web/src/store/ws.js';
@@ -164,6 +167,7 @@ describe('ws policy decision timeline', () => {
 
     it('deduplicates replacement timeline by id keeping the newest timestamp', () => {
         clearPolicyDecisionTimeline();
+        clearPolicyDecisionHistory();
 
         replacePolicyDecisionTimeline([
             {
@@ -199,5 +203,71 @@ describe('ws policy decision timeline', () => {
         expect(timeline).toHaveLength(2);
         expect(timeline.map((event) => event.id)).toEqual(['tool-call-1', 'tool-call-2']);
         expect(timeline[0]?.reason).toBe('newer version');
+    });
+
+    it('preserves full append-only history separately from deduped current state', () => {
+        clearPolicyDecisionTimeline();
+        clearPolicyDecisionHistory();
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'older version',
+                timestamp: '2026-04-08T00:00:01.000Z',
+            },
+        });
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'newer version',
+                timestamp: '2026-04-08T00:00:03.000Z',
+            },
+        });
+
+        expect(getPolicyDecisionTimeline()).toHaveLength(1)
+        expect(getPolicyDecisionHistory()).toHaveLength(2)
+        expect(getPolicyDecisionHistory().map((event) => event.reason)).toEqual(['newer version', 'older version'])
+    })
+
+    it('replaces history independently without deduping it', () => {
+        clearPolicyDecisionHistory();
+
+        replacePolicyDecisionHistory([
+            {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'older version',
+                timestamp: 1,
+            },
+            {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'newer version',
+                timestamp: 3,
+            },
+        ]);
+
+        const history = getPolicyDecisionHistory();
+        expect(history).toHaveLength(2);
+        expect(history.map((event) => event.reason)).toEqual(['newer version', 'older version']);
     });
 });

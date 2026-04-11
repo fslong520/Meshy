@@ -68,6 +68,7 @@ let sseConnected = false;
 let policyDecisionBridgeAttached = false;
 let policyDecisionBridgeUnsub: (() => void) | null = null;
 const policyDecisionTimeline: PolicyDecisionEvent[] = [];
+const policyDecisionHistory: PolicyDecisionEvent[] = [];
 const POLICY_TIMELINE_LIMIT = 200;
 
 function normalizePolicyDecisionTimeline(events: PolicyDecisionEvent[]): PolicyDecisionEvent[] {
@@ -96,6 +97,7 @@ if (import.meta.hot) {
         policyDecisionBridgeUnsub = null;
         policyDecisionBridgeAttached = false;
         policyDecisionTimeline.length = 0;
+        policyDecisionHistory.length = 0;
     });
 }
 
@@ -128,6 +130,11 @@ export function ingestPolicyDecisionEvent(msg: RpcMessage): PolicyDecisionEvent 
     const parsed = parsePolicyDecisionPayload(msg);
     if (!parsed) return null;
 
+    policyDecisionHistory.push(parsed);
+    const sortedHistory = sortPolicyDecisionsNewestFirst(policyDecisionHistory);
+    policyDecisionHistory.length = 0;
+    policyDecisionHistory.push(...sortedHistory);
+
     policyDecisionTimeline.push(parsed);
     const sorted = normalizePolicyDecisionTimeline(policyDecisionTimeline);
     policyDecisionTimeline.length = 0;
@@ -139,13 +146,26 @@ export function getPolicyDecisionTimeline(): PolicyDecisionEvent[] {
     return policyDecisionTimeline.map((item) => ({ ...item }));
 }
 
+export function getPolicyDecisionHistory(): PolicyDecisionEvent[] {
+    return policyDecisionHistory.map((item) => ({ ...item }));
+}
+
 export function replacePolicyDecisionTimeline(events: PolicyDecisionEvent[]): void {
     policyDecisionTimeline.length = 0;
     policyDecisionTimeline.push(...normalizePolicyDecisionTimeline(events));
 }
 
+export function replacePolicyDecisionHistory(events: PolicyDecisionEvent[]): void {
+    policyDecisionHistory.length = 0;
+    policyDecisionHistory.push(...sortPolicyDecisionsNewestFirst(events.map((event) => ({ ...event }))));
+}
+
 export function clearPolicyDecisionTimeline(): void {
     policyDecisionTimeline.length = 0;
+}
+
+export function clearPolicyDecisionHistory(): void {
+    policyDecisionHistory.length = 0;
 }
 
 function ensurePolicyDecisionBridge(): void {
