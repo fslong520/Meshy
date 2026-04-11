@@ -70,6 +70,19 @@ let policyDecisionBridgeUnsub: (() => void) | null = null;
 const policyDecisionTimeline: PolicyDecisionEvent[] = [];
 const POLICY_TIMELINE_LIMIT = 200;
 
+function normalizePolicyDecisionTimeline(events: PolicyDecisionEvent[]): PolicyDecisionEvent[] {
+    const deduped = new Map<string, PolicyDecisionEvent>();
+
+    for (const event of events) {
+        const existing = deduped.get(event.id);
+        if (!existing || event.timestamp >= existing.timestamp) {
+            deduped.set(event.id, { ...event });
+        }
+    }
+
+    return sortPolicyDecisionsNewestFirst(Array.from(deduped.values())).slice(0, POLICY_TIMELINE_LIMIT);
+}
+
 // ─── HMR 安全措施：Vite 热替换时清空所有旧 handler ───
 if (import.meta.hot) {
     import.meta.hot.dispose(() => {
@@ -116,12 +129,9 @@ export function ingestPolicyDecisionEvent(msg: RpcMessage): PolicyDecisionEvent 
     if (!parsed) return null;
 
     policyDecisionTimeline.push(parsed);
-    const sorted = sortPolicyDecisionsNewestFirst(policyDecisionTimeline);
+    const sorted = normalizePolicyDecisionTimeline(policyDecisionTimeline);
     policyDecisionTimeline.length = 0;
     policyDecisionTimeline.push(...sorted);
-    if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
-        policyDecisionTimeline.splice(POLICY_TIMELINE_LIMIT);
-    }
     return parsed;
 }
 
@@ -131,10 +141,7 @@ export function getPolicyDecisionTimeline(): PolicyDecisionEvent[] {
 
 export function replacePolicyDecisionTimeline(events: PolicyDecisionEvent[]): void {
     policyDecisionTimeline.length = 0;
-    policyDecisionTimeline.push(...sortPolicyDecisionsNewestFirst(events.map((item) => ({ ...item }))));
-    if (policyDecisionTimeline.length > POLICY_TIMELINE_LIMIT) {
-        policyDecisionTimeline.splice(POLICY_TIMELINE_LIMIT);
-    }
+    policyDecisionTimeline.push(...normalizePolicyDecisionTimeline(events));
 }
 
 export function clearPolicyDecisionTimeline(): void {

@@ -120,4 +120,84 @@ describe('ws policy decision timeline', () => {
         expect(timeline[0]?.id).toBe('event-204');
         expect(timeline[199]?.id).toBe('event-5');
     });
+
+    it('deduplicates ingested events by id keeping the newest timestamp', () => {
+        clearPolicyDecisionTimeline();
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'older version',
+                timestamp: '2026-04-08T00:00:01.000Z',
+            },
+        });
+
+        ingestPolicyDecisionEvent({
+            type: 'event',
+            name: 'agent:policy_decision',
+            data: {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'newer version',
+                timestamp: '2026-04-08T00:00:03.000Z',
+            },
+        });
+
+        const timeline = getPolicyDecisionTimeline();
+        expect(timeline).toHaveLength(1);
+        expect(timeline[0]).toMatchObject({
+            id: 'tool-call-1',
+            decision: 'deny',
+            reason: 'newer version',
+            timestamp: Date.parse('2026-04-08T00:00:03.000Z'),
+        });
+    });
+
+    it('deduplicates replacement timeline by id keeping the newest timestamp', () => {
+        clearPolicyDecisionTimeline();
+
+        replacePolicyDecisionTimeline([
+            {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'older version',
+                timestamp: 1,
+            },
+            {
+                id: 'tool-call-1',
+                tool: 'write_note',
+                decision: 'deny',
+                mode: 'read_only',
+                permissionClass: 'write',
+                reason: 'newer version',
+                timestamp: 3,
+            },
+            {
+                id: 'tool-call-2',
+                tool: 'read_note',
+                decision: 'allow',
+                mode: 'read_only',
+                permissionClass: 'read',
+                reason: 'another event',
+                timestamp: 2,
+            },
+        ]);
+
+        const timeline = getPolicyDecisionTimeline();
+        expect(timeline).toHaveLength(2);
+        expect(timeline.map((event) => event.id)).toEqual(['tool-call-1', 'tool-call-2']);
+        expect(timeline[0]?.reason).toBe('newer version');
+    });
 });
