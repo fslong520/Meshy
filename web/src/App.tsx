@@ -13,49 +13,12 @@ import {
 } from './store/ws'
 import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
 import { hydrateReplayView } from './store/replay-hydration'
+import { mergePolicyDecision } from './store/policy-decision-ui.js'
 import type { ReplayExport } from '../../src/shared/replay-contract.js'
 import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
 import { InputArea } from './components/InputArea'
-
-type ToolPolicyDecision = NonNullable<ToolCallInfo['policyDecision']>
-
-function parsePolicyDecisionTimestamp(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
-
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value)
-    if (Number.isFinite(parsed)) {
-      return parsed
-    }
-  }
-
-  return undefined
-}
-
-function mergePolicyDecision(
-  incoming?: {
-    decision: 'allow' | 'deny'
-    mode: string
-    permissionClass: string
-    reason: string
-    timestamp?: string | number
-  },
-  existing?: ToolPolicyDecision,
-): ToolPolicyDecision | undefined {
-  if (!incoming) return existing
-
-  return {
-    decision: incoming.decision,
-    mode: incoming.mode,
-    permissionClass: incoming.permissionClass,
-    reason: incoming.reason,
-    timestamp: parsePolicyDecisionTimestamp(incoming.timestamp) ?? existing?.timestamp,
-  }
-}
 
 function App() {
   const { connected } = useWebSocket()
@@ -302,7 +265,7 @@ function App() {
         mode,
         permissionClass,
         reason,
-        timestamp: parsePolicyDecisionTimestamp(data.timestamp),
+        timestamp: data.timestamp,
       }
 
       if (matchedIndex >= 0) {

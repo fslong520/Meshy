@@ -1,4 +1,5 @@
 import type { ToolCallInfo } from '../store/ws'
+import { formatPolicyDecisionTimestamp } from '../store/policy-decision-ui.js'
 
 interface ToolPolicyDecisionBadgeProps {
   decision?: ToolCallInfo['policyDecision']
@@ -7,10 +8,7 @@ interface ToolPolicyDecisionBadgeProps {
 export function ToolPolicyDecisionBadge({ decision }: ToolPolicyDecisionBadgeProps) {
   if (!decision) return null
 
-  const formattedTimestamp =
-    typeof decision.timestamp === 'number' && Number.isFinite(decision.timestamp)
-      ? new Date(decision.timestamp).toISOString().replace('T', ' ')
-      : null
+  const formattedTimestamp = formatPolicyDecisionTimestamp(decision.timestamp)
 
   return (
     <div className={`tool-policy-badge tool-policy-badge--${decision.decision}`}>

@@ -3,6 +3,7 @@ import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/
 import { normalizeReplayEvents } from '../../../src/shared/replay-normalization.js'
 import { normalizeReplayExport } from '../../../src/shared/replay-export-normalization.js'
 import { getReplayStepProjection } from '../../../src/shared/replay-step-projection.js'
+import { parsePolicyDecisionTimestamp } from './policy-decision-ui.js'
 
 type NormalizedReplayEvent = ReplayEvent
 
@@ -86,7 +87,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
             mode: event.mode,
             permissionClass: event.permissionClass,
             reason: event.reason,
-            timestamp: parseReplayTimestamp(event.timestamp),
+            timestamp: parsePolicyDecisionTimestamp(event.timestamp),
           }
         }
       }
@@ -150,7 +151,7 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
           matchedTc.policyDecision = projection?.kind === 'tool_result' && projection.policyDecision
             ? {
               ...projection.policyDecision,
-              timestamp: parseReplayTimestamp(projection.policyDecision.timestamp),
+              timestamp: parsePolicyDecisionTimestamp(projection.policyDecision.timestamp),
             }
             : undefined
         }

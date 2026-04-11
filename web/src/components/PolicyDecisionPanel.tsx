@@ -1,4 +1,5 @@
 import type { PolicyDecisionEvent } from '../store/ws'
+import { formatPolicyDecisionTimestamp, sortPolicyDecisionsNewestFirst } from '../store/policy-decision-ui.js'
 
 interface PolicyDecisionPanelProps {
   events: PolicyDecisionEvent[]
@@ -6,13 +7,8 @@ interface PolicyDecisionPanelProps {
 
 const MAX_VISIBLE_EVENTS = 6
 
-function formatPersistedTimestamp(timestamp: number): string {
-  return new Date(timestamp).toISOString().replace('T', ' ')
-}
-
 export function PolicyDecisionPanel({ events }: PolicyDecisionPanelProps) {
-  const recentEvents = [...events]
-    .sort((left, right) => right.timestamp - left.timestamp)
+  const recentEvents = sortPolicyDecisionsNewestFirst(events)
     .slice(0, MAX_VISIBLE_EVENTS)
 
   return (
@@ -40,7 +36,7 @@ export function PolicyDecisionPanel({ events }: PolicyDecisionPanelProps) {
                 </span>
                 <code>{event.tool}</code>
                 <time dateTime={new Date(event.timestamp).toISOString()}>
-                  {formatPersistedTimestamp(event.timestamp)}
+                  {formatPolicyDecisionTimestamp(event.timestamp)}
                 </time>
               </div>
 
