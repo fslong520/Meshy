@@ -9,6 +9,7 @@ import {
   type ChatMessage,
   type RpcMessage,
   type PolicyDecisionEvent,
+  type ToolCallInfo,
 } from './store/ws'
 import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
 import { hydrateReplayView } from './store/replay-hydration'
@@ -17,6 +18,44 @@ import { LeftSidebar } from './components/LeftSidebar'
 import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
 import { InputArea } from './components/InputArea'
+
+type ToolPolicyDecision = NonNullable<ToolCallInfo['policyDecision']>
+
+function parsePolicyDecisionTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+
+  return undefined
+}
+
+function mergePolicyDecision(
+  incoming?: {
+    decision: 'allow' | 'deny'
+    mode: string
+    permissionClass: string
+    reason: string
+    timestamp?: string | number
+  },
+  existing?: ToolPolicyDecision,
+): ToolPolicyDecision | undefined {
+  if (!incoming) return existing
+
+  return {
+    decision: incoming.decision,
+    mode: incoming.mode,
+    permissionClass: incoming.permissionClass,
+    reason: incoming.reason,
+    timestamp: parsePolicyDecisionTimestamp(incoming.timestamp) ?? existing?.timestamp,
+  }
+}
 
 function App() {
   const { connected } = useWebSocket()
@@ -130,6 +169,7 @@ function App() {
         mode: string;
         permissionClass: string;
         reason: string;
+        timestamp?: string | number;
       };
     }
     const toolName = data.name || data.tool || 'unknown_tool'
@@ -139,12 +179,13 @@ function App() {
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
+      const existingPolicyDecision = existingToolCalls.find((toolCall) => toolCall.id === data.id)?.policyDecision
       const finalToolCalls = upsertToolCallById(existingToolCalls, {
         id: data.id,
         name: toolName,
         result: resultText,
         status: (isError ? 'error' : 'done') as 'error' | 'done',
-        policyDecision: data.policyDecision,
+        policyDecision: mergePolicyDecision(data.policyDecision, existingPolicyDecision),
       })
 
       list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
@@ -164,17 +205,21 @@ function App() {
         mode: string;
         permissionClass: string;
         reason: string;
+        timestamp?: string | number;
       };
     }
     const errorText = data.reason || data.error || 'Unknown error'
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
       const existingToolCalls = agent.toolCalls || []
+      const existingPolicyDecision = data.id
+        ? existingToolCalls.find((toolCall) => toolCall.id === data.id)?.policyDecision
+        : undefined
       const { list: finalToolCalls } = attachToolError(existingToolCalls, {
         id: data.id,
         tool: data.tool,
         errorText,
-        policyDecision: data.policyDecision,
+        policyDecision: mergePolicyDecision(data.policyDecision, existingPolicyDecision),
       })
 
       list[list.length - 1] = { ...agent, toolCalls: finalToolCalls }
@@ -226,6 +271,7 @@ function App() {
       mode?: string;
       permissionClass?: string;
       reason?: string;
+      timestamp?: string | number;
     }
 
     if (!data.id || !data.tool || !data.decision || !data.mode || !data.permissionClass || !data.reason) {
@@ -256,6 +302,7 @@ function App() {
         mode,
         permissionClass,
         reason,
+        timestamp: parsePolicyDecisionTimestamp(data.timestamp),
       }
 
       if (matchedIndex >= 0) {

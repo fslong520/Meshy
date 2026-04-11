@@ -36,6 +36,7 @@ export interface ToolCallInfo {
         mode: string;
         permissionClass: string;
         reason: string;
+        timestamp?: number;
     };
 }
 

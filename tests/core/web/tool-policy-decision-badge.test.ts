@@ -19,6 +19,7 @@ describe('ToolPolicyDecisionBadge', () => {
         mode: 'read_only',
         permissionClass: 'write',
         reason: 'permissionClass write is blocked in read-only mode',
+        timestamp: Date.parse('2026-04-08T00:00:07.000Z'),
       },
     })
 
@@ -28,6 +29,7 @@ describe('ToolPolicyDecisionBadge', () => {
     expect(text).toContain('read_only')
     expect(text).toContain('write')
     expect(text).toContain('permissionClass write is blocked in read-only mode')
+    expect(text).toContain('2026-04-08 00:00:07.000Z')
   })
 
   it('returns null for missing policy decisions', () => {

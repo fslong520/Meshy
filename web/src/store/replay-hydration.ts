@@ -86,6 +86,7 @@ function eventReplayToMessages(replay: ReplayExport): { messages: ChatMessage[];
             mode: event.mode,
             permissionClass: event.permissionClass,
             reason: event.reason,
+            timestamp: parseReplayTimestamp(event.timestamp),
           }
         }
       }
@@ -146,7 +147,12 @@ export function replayToMessages(replay: ReplayExport): ChatMessage[] {
         if (matchedTc) {
           matchedTc.result = resultText
           matchedTc.status = projection?.kind === 'tool_result' && projection.isError ? 'error' : 'done'
-          matchedTc.policyDecision = projection?.kind === 'tool_result' ? projection.policyDecision : undefined
+          matchedTc.policyDecision = projection?.kind === 'tool_result' && projection.policyDecision
+            ? {
+              ...projection.policyDecision,
+              timestamp: parseReplayTimestamp(projection.policyDecision.timestamp),
+            }
+            : undefined
         }
       }
       continue
