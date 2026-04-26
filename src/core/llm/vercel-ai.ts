@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { streamText, ModelMessage, tool, jsonSchema } from 'ai';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import { streamText, generateText, ModelMessage, tool, jsonSchema } from 'ai';
 import {
     AgentMessageEvent,
     ILLMProvider,
@@ -15,6 +16,8 @@ const BUNDLED_PROVIDERS: Record<string, (options: any) => any> = {
     '@ai-sdk/openai': createOpenAI,
     'anthropic': createAnthropic,
     '@ai-sdk/anthropic': createAnthropic,
+    'deepseek': createDeepSeek,
+    '@ai-sdk/deepseek': createDeepSeek,
 };
 
 export class VercelAIAdapter implements ILLMProvider {
@@ -37,15 +40,15 @@ export class VercelAIAdapter implements ILLMProvider {
 
         const factory = BUNDLED_PROVIDERS[sdkIdentifier];
         if (factory) {
-            let normalizedBaseURL = baseURL;
-            if (sdkIdentifier.includes('anthropic')) {
-                normalizedBaseURL = baseURL?.replace(/\/v1\/?$/, '') || undefined;
-            }
+            const isCodexProxy = !!baseURL && (baseURL.includes('openai-codex-oauth') || baseURL.includes('127.0.0.1:8317'));
+            const normalizedBaseURL = (sdkIdentifier.includes('anthropic') && !isCodexProxy)
+                ? baseURL?.replace(/\/v1\/?$/, '')
+                : baseURL;
 
             const sdk = factory({
                 apiKey,
                 baseURL: normalizedBaseURL,
-                headers: { 'x-api-key': apiKey }
+                headers: isCodexProxy ? { 'X-API-Key': apiKey } : { 'x-api-key': apiKey }
             });
             this.model = sdk(modelId);
         } else {
@@ -66,15 +69,48 @@ export class VercelAIAdapter implements ILLMProvider {
         abortSignal?: AbortSignal
     ): Promise<void> {
         const messages: ModelMessage[] = [];
+        const toolNameById = new Map<string, string>();
+        const safeString = (value: unknown): string => {
+            if (typeof value === 'string') return value;
+            if (value === null || value === undefined) return '';
+            try {
+                return JSON.stringify(value);
+            } catch {
+                return String(value);
+            }
+        };
+        const normalizeToolArgs = (args: unknown): Record<string, any> => {
+            if (args === null || args === undefined) return {};
+            if (typeof args === 'string') {
+                try {
+                    const parsed = JSON.parse(args);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, any>;
+                    return { value: parsed };
+                } catch {
+                    return { raw: args };
+                }
+            }
+            if (typeof args === 'object') {
+                if (Array.isArray(args)) return { value: args };
+                return args as Record<string, any>;
+            }
+            return { value: args };
+        };
+        const normalizeToolOutput = (output: unknown): { type: 'text' | 'json'; value: any } => {
+            if (typeof output === 'string') return { type: 'text', value: output };
+            if (output === null || output === undefined) return { type: 'text', value: '' };
+            return { type: 'json', value: output };
+        };
+        const pushTextMessage = (role: 'user' | 'assistant', text: string) => {
+            messages.push({ role, content: text });
+        };
 
         for (const msg of prompt.messages) {
             if (msg.role === 'system') continue; // Handled top-level in streamText
 
             if (typeof msg.content === 'string') {
-                messages.push({
-                    role: msg.role === 'assistant' ? 'assistant' : 'user',
-                    content: msg.content
-                });
+                const role = msg.role === 'assistant' ? 'assistant' : 'user';
+                pushTextMessage(role, msg.content);
             } else if (Array.isArray(msg.content)) {
                 const parts: any[] = [];
                 for (const part of msg.content) {
@@ -118,24 +154,35 @@ export class VercelAIAdapter implements ILLMProvider {
                     content: parts as any
                 });
             } else if (msg.content.type === 'tool_call') {
+                const callId = safeString(msg.content.id) || `call-${Date.now()}`;
+                const toolName = safeString(msg.content.name) || 'unknown';
+                toolNameById.set(callId, toolName);
+                const args = normalizeToolArgs(msg.content.arguments);
                 messages.push({
                     role: 'assistant',
                     content: [{
-                        toolCallId: msg.content.id,
-                        toolName: msg.content.name,
-                        args: msg.content.arguments
+                        type: 'tool-call',
+                        toolCallId: callId,
+                        toolName,
+                        input: args
                     } as any]
                 });
             } else if (msg.content.type === 'tool_result') {
+                const callId = safeString(msg.content.id) || `call-${Date.now()}`;
+                const toolName = toolNameById.get(callId) ?? 'unknown';
                 messages.push({
                     role: 'tool',
                     content: [{
                         type: 'tool-result',
-                        toolCallId: msg.content.id,
-                        toolName: 'unknown',
-                        result: msg.content.content
+                        toolCallId: callId,
+                        toolName,
+                        output: normalizeToolOutput(msg.content.content)
                     } as any]
                 });
+            } else {
+                const fallback = safeString(msg.content);
+                const role = msg.role === 'assistant' ? 'assistant' : 'user';
+                pushTextMessage(role, fallback);
             }
         }
 
@@ -151,6 +198,11 @@ export class VercelAIAdapter implements ILLMProvider {
         }
 
         try {
+            console.log('[VercelAIAdapter] streamText start', {
+                sdk: this.sdkIdentifier,
+                model: this.modelId,
+                baseURL: this.baseURL
+            });
             const result = streamText({
                 model: this.model,
                 messages,
@@ -159,14 +211,31 @@ export class VercelAIAdapter implements ILLMProvider {
                 abortSignal
             } as any);
 
+            let gotAnyChunk = false;
+            let activeToolInput: { id: string; name: string; args: string } | null = null;
             for await (const chunk of result.fullStream) {
+                gotAnyChunk = true;
                 const c = chunk as any;
+                if (c?.type) {
+                    console.log('[VercelAIAdapter] chunk type:', c.type);
+                }
                 if (c.type === 'text-delta') {
-                    onEvent({ type: 'text', data: c.textDelta });
+                    const textDelta = c.textDelta ?? c.text ?? c.delta ?? c.content;
+                    if (typeof textDelta === 'string') {
+                        onEvent({ type: 'text', data: textDelta });
+                    }
+                } else if (c.type === 'text-start') {
+                    // noop
+                } else if (c.type === 'text-end') {
+                    // noop
                 } else if (c.type === 'tool-call-streaming-start') {
-                    onEvent({ type: 'tool_call_start', data: { id: c.toolCallId, name: c.toolName } });
+                    if (c.toolCallId && c.toolName) {
+                        onEvent({ type: 'tool_call_start', data: { id: c.toolCallId, name: c.toolName } });
+                    }
                 } else if (c.type === 'tool-call-delta') {
-                    onEvent({ type: 'tool_call_chunk', data: c.argsTextDelta });
+                    if (typeof c.argsTextDelta === 'string') {
+                        onEvent({ type: 'tool_call_chunk', data: c.argsTextDelta });
+                    }
                 } else if (c.type === 'tool-call') {
                     // tool-call-streaming events cover streaming, but if the provider only returns full chunk
                     // ai sdk will fire tool-call directly or at the end. We handle stream-end.
@@ -175,10 +244,59 @@ export class VercelAIAdapter implements ILLMProvider {
                         onEvent({ type: 'tool_call_chunk', data: JSON.stringify(c.args) });
                     }
                     onEvent({ type: 'tool_call_end' });
+                } else if (c.type === 'tool-input-start') {
+                    const id = c.toolCallId ?? c.id ?? c.tool_call_id;
+                    const name = c.toolName ?? c.name ?? c.tool_name;
+                    if (id && name) {
+                        activeToolInput = { id, name, args: '' };
+                        onEvent({ type: 'tool_call_start', data: { id, name } });
+                    }
+                } else if (c.type === 'tool-input-delta') {
+                    const delta = c.delta ?? c.textDelta ?? c.argsTextDelta ?? c.inputDelta ?? c.input;
+                    if (activeToolInput && typeof delta === 'string') {
+                        activeToolInput.args += delta;
+                        onEvent({ type: 'tool_call_chunk', data: delta });
+                    }
+                } else if (c.type === 'tool-input-end') {
+                    if (activeToolInput) {
+                        onEvent({ type: 'tool_call_end' });
+                        activeToolInput = null;
+                    }
                 } else if (c.type === 'step-finish' || c.type === 'finish') {
                     // Finalization
+                } else if (c.type === 'reasoning-delta') {
+                    const reasoningDelta = c.reasoningDelta ?? c.reasoning ?? c.delta;
+                    if (typeof reasoningDelta === 'string') {
+                        onEvent({ type: 'reasoning_chunk', data: reasoningDelta });
+                    }
                 } else if (c.type === 'error') {
                     onEvent({ type: 'error', data: String(c.error) });
+                }
+            }
+
+            if (!gotAnyChunk) {
+                console.warn('[VercelAIAdapter] streamText produced no chunks; falling back to generateText');
+                const fallback = await generateText({
+                    model: this.model,
+                    messages,
+                    system: prompt.systemPrompt,
+                    tools: Object.keys(tools).length > 0 ? tools : undefined,
+                    abortSignal
+                } as any);
+
+                if (fallback.text) {
+                    onEvent({ type: 'text', data: fallback.text });
+                }
+
+                if (fallback.toolCalls && fallback.toolCalls.length > 0) {
+                    for (const call of fallback.toolCalls as any[]) {
+                        const id = call.toolCallId || `tool-${Date.now()}`;
+                        const name = call.toolName || 'unknown';
+                        onEvent({ type: 'tool_call_start', data: { id, name } });
+                        const argsText = JSON.stringify(call.input ?? {});
+                        onEvent({ type: 'tool_call_chunk', data: argsText });
+                        onEvent({ type: 'tool_call_end' });
+                    }
                 }
             }
 
