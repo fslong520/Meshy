@@ -14,3 +14,4 @@ public/
 .worktrees/
 vitest.config.ts
 __pycache__/
+*.bak
