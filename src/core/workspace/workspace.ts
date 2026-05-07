@@ -3,6 +3,8 @@ import { McpHostRuntime } from '../mcp/host.js';
 import { LSPManager } from '../lsp/index.js';
 import { SnapshotManager } from '../session/snapshot.js';
 import { ReflectionEngine } from '../memory/reflection.js';
+import { HumanLikeRetriever } from '../memory/retrieval.js';
+import { EmergenceDetector } from '../memory/emergence.js';
 import { ILLMProvider } from '../llm/provider.js';
 import path from 'path';
 import fs from 'fs';
@@ -23,6 +25,10 @@ export class Workspace {
     public readonly reflectionEngine: ReflectionEngine;
     public readonly blackboard: CollaborativeBlackboard;
 
+    // ── 忆时增强：类人检索引擎 & 记忆涌现检测 ──
+    public readonly humanLikeRetriever: HumanLikeRetriever;
+    public readonly emergenceDetector: EmergenceDetector;
+
     private config: WorkspaceConfig;
     private repoMapCache: string | null = null;
 
@@ -40,6 +46,10 @@ export class Workspace {
         // Initialize components bound to this workspace
         this.memoryStore = new MemoryStore(this.rootPath, embeddingProvider);
         this.reflectionEngine = new ReflectionEngine(llmProvider, this.memoryStore);
+
+        // ── 忆时增强初始化 ──
+        this.humanLikeRetriever = new HumanLikeRetriever(this.memoryStore);
+        this.emergenceDetector = new EmergenceDetector(this.humanLikeRetriever, this.memoryStore);
 
         this.mcpHost = new McpHostRuntime(this.rootPath);
         this.mcpHost.loadConfig();

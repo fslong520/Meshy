@@ -43,6 +43,10 @@ export interface StandardPrompt {
     systemPrompt?: string;
     messages: StandardMessage[];
     tools?: StandardTool[];
+    /** 模型微调参数 */
+    temperature?: number;
+    maxTokens?: number;
+    topP?: number;
 }
 
 export interface ILLMProvider {

@@ -16,7 +16,7 @@
 
 import { ILLMProvider } from '../llm/provider.js';
 import { Session } from '../session/state.js';
-import { MemoryStore, Capsule } from '../memory/store.js';
+import { MemoryStore, Capsule, EmotionLevel, EMOTION_WEIGHTS } from '../memory/store.js';
 import { MemoryConsolidationAgent } from './consolidation.js';
 
 // ─── 反馈类型 ───
@@ -84,12 +84,14 @@ export class ReflectionEngine {
 
             if (!extracted) return null;
 
-            // 写入 MemoryStore
+            // 写入 MemoryStore（忆时增强：附带情绪等级）
             const capsuleId = await this.memoryStore.addCapsule({
                 sessionId: session.id,
                 summary: extracted.summary,
                 tags: extracted.tags,
                 category,
+                emotion: extracted.emotion || 'none',
+                emotionWeight: extracted.emotion ? EMOTION_WEIGHTS[extracted.emotion] : 0,
             });
 
             console.log(`[Reflection] Capsule #${capsuleId} saved: "${extracted.summary.slice(0, 60)}..."`);
@@ -205,19 +207,26 @@ export class ReflectionEngine {
     private async extractWithLLM(
         operationSummary: string,
         category: Capsule['category']
-    ): Promise<{ summary: string; tags: string[] } | null> {
+    ): Promise<{ summary: string; tags: string[]; emotion?: EmotionLevel } | null> {
         let responseText = '';
 
         try {
             await this.llm.generateResponseStream(
                 {
-                    systemPrompt: `You are a knowledge extraction agent. Given a session operation log, extract a concise reusable lesson.
+                    systemPrompt: `You are a knowledge extraction agent. Given a session operation log, extract a concise reusable lesson and infer the emotional intensity.
 
 Respond ONLY with a JSON object in this exact format:
 {
   "summary": "A concise 1-2 sentence description of what was learned",
-  "tags": ["tag1", "tag2", "tag3"]
+  "tags": ["tag1", "tag2", "tag3"],
+  "emotion": "none" | "low" | "medium" | "high"
 }
+
+emotion 说明：
+- "high": 涉及重大挫折、突破性成功、影响深远的决策（情绪强烈，记忆留存更久）
+- "medium": 普通但有意义的经验
+- "low": 轻微印象
+- "none": 纯事实记录，无情绪
 
 Category context: "${category}"
 - If "success_pattern": focus on WHAT worked well and WHY
@@ -237,9 +246,11 @@ Category context: "${category}"
             if (!jsonMatch) return null;
 
             const parsed = JSON.parse(jsonMatch[0]);
+            const validEmotions: EmotionLevel[] = ['high', 'medium', 'low', 'none'];
             return {
                 summary: parsed.summary || '',
                 tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+                emotion: validEmotions.includes(parsed.emotion) ? parsed.emotion : 'none',
             };
         } catch {
             return null;

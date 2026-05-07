@@ -61,9 +61,19 @@ export class SystemPromptBuilder {
         return this;
     }
 
-    /** Phase 4 经验回放提示 */
+    /** Phase 4 经验回放提示（由记忆系统注入） */
     withMemoryHint(hint: string): this {
         this.memoryHint = hint;
+        return this;
+    }
+
+    /** 忆时增强：记忆涌现上下文（话题转换时主动联想） */
+    withEmergenceContext(emergenceText: string): this {
+        // 拼入 memoryHint 但在前后加标记，使其在 prompt 中更醒目
+        const formatted = `\n[Memory Emergence — 记忆涌现]\n${emergenceText}\n`;
+        this.memoryHint = this.memoryHint
+            ? this.memoryHint + '\n' + formatted
+            : formatted;
         return this;
     }
 

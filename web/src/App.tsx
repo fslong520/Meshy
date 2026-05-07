@@ -110,6 +110,25 @@ function App() {
       })
   }, [])
 
+  // 页面加载时自动加载当前 session 的历史消息
+  useEffect(() => {
+    sendRpc<{ sessionId: string; replay?: ReplayExport }>('session:get')
+      .then(res => {
+        if (res?.replay) {
+          const hydrated = hydrateReplayView(res.replay)
+          setMessages(hydrated.messages)
+          setActiveSession({ id: res.sessionId, title: res.replay.title })
+          setBbGoal(res.replay.blackboard.currentGoal)
+          setBbTasks(res.replay.blackboard.tasks)
+          replacePolicyDecisionTimeline(hydrated.policyDecisions)
+          replacePolicyDecisionHistory(hydrated.policyDecisions)
+          setPolicyDecisions(getPolicyDecisionTimeline())
+          setPolicyDecisionHistory(getPolicyDecisionHistory())
+        }
+      })
+      .catch(err => console.warn('[App] Failed to load session on startup:', err))
+  }, [])
+
   // 处理模型选择
   const handleModelSelect = async (modelId: string) => {
     const res = await sendRpc<{ success: boolean; error?: string }>('model:switch', { model: modelId })
@@ -134,6 +153,10 @@ function App() {
   const [showReasoning, setShowReasoning] = useState<boolean>(() => {
     return localStorage.getItem('meshy-show-reasoning') !== 'false'
   })
+  // 模型微调参数
+  const [fineTuneTemp, setFineTuneTemp] = useState(0.7)
+  const [fineTuneMaxTokens, setFineTuneMaxTokens] = useState(4096)
+  const [fineTuneTopP, setFineTuneTopP] = useState(1.0)
 
   // 应用主题
   useEffect(() => {
@@ -165,6 +188,20 @@ function App() {
   }, [showReasoning])
 
   const handleSettingsOpen = useCallback(() => setShowSettings(true), [])
+
+  // 模型列表版本号 —— 用于触发 InputArea 重新拉取
+  const [modelListVersion, setModelListVersion] = useState(0)
+
+  // 刷新模型列表（settings 关闭时自动调用）
+  const refreshModelList = useCallback(() => {
+    sendRpc<{ providers: Record<string, { protocol: string; models: string[] }>; defaultModel: string }>('model:list')
+      .then(res => {
+        if (res?.providers) setModelProviders(res.providers)
+        if (res?.defaultModel) setActiveModel(res.defaultModel)
+        setModelListVersion(v => v + 1)
+      })
+      .catch(() => {})
+  }, [])
 
   // 翻译辅助函数（使用当前 lang 状态）
   const t = (key: string): string => {
@@ -222,8 +259,38 @@ function App() {
   })
 
   // Agent 完成
-  useEvent('agent:done', () => {
+  useEvent('agent:done', (msg: RpcMessage) => {
     setAgentStreaming(false)
+    setMessages((prev) => {
+      const data = msg.data as { id?: string; finalContent?: string } | undefined
+      const finalContent = data?.finalContent || ''
+      const last = prev[prev.length - 1]
+
+      // 已有 agent 消息且有内容 → 用 finalContent 覆盖（因 SSE 可能丢包导致内容残缺）
+      if (last?.role === 'agent' && last.content) {
+        if (finalContent && finalContent.length > last.content.length) {
+          return [...prev.slice(0, -1), { ...last, content: finalContent }]
+        }
+        return prev
+      }
+
+      // agent 消息存在但仅有 reasoningContent
+      if (last?.role === 'agent' && !last.content && last.reasoningContent) {
+        return [...prev.slice(0, -1), { ...last, content: last.reasoningContent }]
+      }
+
+      // SSE 断连导致 agent 消息缺失 → 用 finalContent 补建
+      if (finalContent && (!last || last.role !== 'agent')) {
+        return [...prev, {
+          id: data?.id || `agent-${Date.now()}`,
+          role: 'agent',
+          content: finalContent,
+          timestamp: Date.now(),
+        }]
+      }
+
+      return prev
+    })
   })
 
   // Session 被后端系统指令重置/切换
@@ -451,8 +518,8 @@ function App() {
       // 立即进入持续执行状态，触发显示暂停按钮
       setAgentStreaming(true)
 
-      // 通过 RPC 提交任务
-      sendRpc('task:submit', { prompt: text, mode, attachments })
+      // 通过 RPC 提交任务（附带模型微调参数）
+      sendRpc('task:submit', { prompt: text, mode, attachments, temperature: fineTuneTemp, maxTokens: fineTuneMaxTokens, topP: fineTuneTopP })
     },
     [],
   )
@@ -545,39 +612,41 @@ function App() {
           onApproval={handleApproval}
           activeSession={activeSession}
           onSessionAction={handleSessionAction}
+          showReasoning={showReasoning}
+          agentStreaming={agentStreaming}
         />
+
+        {/* Blackboard — 放于 ChatPanel 与 InputArea 之间，流式推送而非遮盖 */}
+        <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
+          <div className="bb-drawer-inner">
+            <h3 className="bb-title">Blackboard</h3>
+            {bbGoal ? (
+              <>
+                <p className="bb-goal">🎯 {bbGoal}</p>
+                {bbTasks.map((t) => (
+                  <div className="bb-task" key={t.id}>
+                    <input type="checkbox" checked={t.status === 'completed'} readOnly />
+                    <span className={t.status === 'completed' ? 'bb-task-done' : ''}>
+                      {t.description}
+                    </span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="bb-empty">Goal and task status will appear here during active sessions.</p>
+            )}
+          </div>
+        </div>
+
         <InputArea
           onSend={handleSend}
           disabled={agentStreaming}
           bbOpen={bbOpen}
           onToggleBb={() => setBbOpen(!bbOpen)}
+          modelListVersion={modelListVersion}
         />
       </div>
       <RightPanel policyDecisions={policyDecisions} policyDecisionHistory={policyDecisionHistory} />
-
-      {/* Blackboard Drawer */}
-      <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
-        <h3>Blackboard</h3>
-        {bbGoal ? (
-          <>
-            <p style={{ color: 'var(--text-primary)', fontSize: 14, marginBottom: 8 }}>
-              🎯 {bbGoal}
-            </p>
-            {bbTasks.map((t) => (
-              <div className="bb-task" key={t.id}>
-                <input type="checkbox" checked={t.status === 'completed'} readOnly />
-                <span style={{ color: t.status === 'completed' ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                  {t.description}
-                </span>
-              </div>
-            ))}
-          </>
-        ) : (
-          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-            Goal and task status will appear here during active sessions.
-          </p>
-        )}
-      </div>
 
       {/* Settings Modal */}
       {showSettings && (
@@ -592,7 +661,10 @@ function App() {
           modelLoading={modelLoading}
           activeModel={activeModel}
           onModelSelect={handleModelSelect}
-          onClose={() => setShowSettings(false)}
+          onClose={() => { setShowSettings(false); refreshModelList(); }}
+          fineTuneTemp={fineTuneTemp} setFineTuneTemp={setFineTuneTemp}
+          fineTuneMaxTokens={fineTuneMaxTokens} setFineTuneMaxTokens={setFineTuneMaxTokens}
+          fineTuneTopP={fineTuneTopP} setFineTuneTopP={setFineTuneTopP}
         />
       )}
     </div>
@@ -600,11 +672,21 @@ function App() {
 }
 
 // ─── Settings Modal ───
+interface CustomProviderInfo {
+  name: string;
+  protocol?: string;
+  sdk?: string;
+  baseUrl?: string;
+  hasApiKey: boolean;
+  models: string[];
+}
+
 function SettingsModal({
   lang, setLang, theme, setTheme, fontSize, setFontSize,
   compactMessages, setCompactMessages, showReasoning, setShowReasoning,
   t, onClose,
-  modelProviders, modelLoading, activeModel, onModelSelect
+  modelProviders, modelLoading, activeModel, onModelSelect,
+  fineTuneTemp, setFineTuneTemp, fineTuneMaxTokens, setFineTuneMaxTokens, fineTuneTopP, setFineTuneTopP,
 }: {
   lang: Lang; setLang: (l: Lang) => void;
   theme: Theme; setTheme: (t: Theme) => void;
@@ -617,9 +699,124 @@ function SettingsModal({
   modelLoading: boolean;
   activeModel: string;
   onModelSelect: (modelId: string) => void;
+  fineTuneTemp: number; setFineTuneTemp: (v: number) => void;
+  fineTuneMaxTokens: number; setFineTuneMaxTokens: (v: number) => void;
+  fineTuneTopP: number; setFineTuneTopP: (v: number) => void;
 }) {
   const [policyMode, setPolicyMode] = useState<'standard' | 'read_only'>('standard')
   const [loading, setLoading] = useState(true)
+
+  // ─── 自定义 Provider 状态 ───
+  const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([])
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [editingProvider, setEditingProvider] = useState<string | null>(null)
+  const [formName, setFormName] = useState('')
+  const [formBaseUrl, setFormBaseUrl] = useState('')
+  const [formApiKey, setFormApiKey] = useState('')
+  const [formProtocol, setFormProtocol] = useState('openai')
+  const [formSdk, setFormSdk] = useState('')
+  const [formModels, setFormModels] = useState('')
+  const [formBusy, setFormBusy] = useState(false)
+  const [customProvError, setCustomProvError] = useState('')
+
+  // 加载自定义 Provider 列表
+  useEffect(() => {
+    sendRpc<{ providers: CustomProviderInfo[] }>('provider:list')
+      .then(res => {
+        if (res?.providers) setCustomProviders(res.providers)
+      })
+      .catch(() => {})
+  }, [])
+
+  const resetForm = () => {
+    setFormName('')
+    setFormBaseUrl('')
+    setFormApiKey('')
+    setFormProtocol('openai')
+    setFormSdk('')
+    setFormModels('')
+    setEditingProvider(null)
+    setShowAddForm(false)
+    setCustomProvError('')
+  }
+
+  const openAddForm = () => {
+    resetForm()
+    setShowAddForm(true)
+  }
+
+  const openEditForm = (p: CustomProviderInfo) => {
+    setFormName(p.name)
+    setFormBaseUrl(p.baseUrl || '')
+    setFormApiKey('') // 不预填已存储的 key
+    setFormProtocol(p.protocol || 'openai')
+    setFormSdk(p.sdk || '')
+    setFormModels((p.models || []).join(', '))
+    setEditingProvider(p.name)
+    setShowAddForm(true)
+    setCustomProvError('')
+  }
+
+  const handleSaveProvider = async () => {
+    setCustomProvError('')
+    if (!formName.trim()) {
+      setCustomProvError('Provider name is required.')
+      return
+    }
+    if (!formBaseUrl.trim()) {
+      setCustomProvError('Base URL is required.')
+      return
+    }
+
+    setFormBusy(true)
+    try {
+      const modelList = formModels
+        .split(',')
+        .map(m => m.trim())
+        .filter(Boolean)
+
+      const isEditing = !!editingProvider
+      const method = isEditing ? 'provider:update' : 'provider:add'
+      const params: Record<string, any> = {
+        name: formName.trim(),
+        baseUrl: formBaseUrl.trim(),
+        apiKey: formApiKey.trim(),
+        protocol: formProtocol,
+        models: modelList,
+      }
+      if (formSdk.trim()) params.sdk = formSdk.trim()
+
+      // 如果是编辑且修改了名称，先删旧再加新
+      if (isEditing && editingProvider !== formName.trim()) {
+        await sendRpc('provider:remove', { name: editingProvider })
+        const res = await sendRpc<{ success: boolean; error?: string }>('provider:add', params)
+        if (!res.success) throw new Error(res.error)
+      } else {
+        const res = await sendRpc<{ success: boolean; error?: string }>(method, params)
+        if (!res.success) throw new Error(res.error)
+      }
+
+      // 刷新列表
+      const listRes = await sendRpc<{ providers: CustomProviderInfo[] }>('provider:list')
+      if (listRes?.providers) setCustomProviders(listRes.providers)
+      resetForm()
+    } catch (err: any) {
+      setCustomProvError(err.message || 'Failed to save provider.')
+    } finally {
+      setFormBusy(false)
+    }
+  }
+
+  const handleDeleteProvider = async (name: string) => {
+    if (!window.confirm(`Are you sure you want to remove provider "${name}"?`)) return
+    try {
+      const res = await sendRpc<{ success: boolean; error?: string }>('provider:remove', { name })
+      if (!res.success) throw new Error(res.error)
+      setCustomProviders(prev => prev.filter(p => p.name !== name))
+    } catch (err: any) {
+      alert(`Failed to remove provider: ${err.message}`)
+    }
+  }
 
   // Load current policy mode
   useEffect(() => {
@@ -655,6 +852,53 @@ function SettingsModal({
     setTheme(t)
   }
 
+  // ─── 内联样式常量 ───
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '6px 10px', borderRadius: 5, fontSize: 12,
+    border: '1px solid var(--border, #444)', background: 'var(--bg-secondary)',
+    color: 'var(--text, #eee)', fontFamily: 'var(--font-sans)', outline: 'none',
+  };
+  const btnSec: React.CSSProperties = {
+    padding: '5px 12px', borderRadius: 5, fontSize: 11, cursor: 'pointer',
+    border: '1px solid var(--border, #444)', background: 'transparent',
+    color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)',
+  };
+  const btnPrim: React.CSSProperties = {
+    padding: '5px 12px', borderRadius: 5, fontSize: 11, cursor: 'pointer',
+    border: 'none', background: 'var(--accent, #4ade80)',
+    color: '#000', fontWeight: 600, fontFamily: 'var(--font-sans)',
+  };
+  const btnMini: React.CSSProperties = {
+    padding: '1px 7px', borderRadius: 4, fontSize: 10, cursor: 'pointer',
+    border: '1px solid var(--border, #444)', background: 'transparent',
+    color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)',
+  };
+
+  function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: string; checked: boolean; onChange: () => void }) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text, #eee)' }}>{label}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{desc}</div>
+        </div>
+        <label style={{ position: 'relative', display: 'inline-block', width: 36, height: 20, cursor: 'pointer', flexShrink: 0 }}>
+          <input type="checkbox" checked={checked} onChange={onChange} style={{ opacity: 0, width: 0, height: 0 }} />
+          <span style={{
+            position: 'absolute', inset: 0, borderRadius: 10,
+            background: checked ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
+            transition: 'background 0.2s',
+          }}>
+            <span style={{
+              position: 'absolute', top: 2, left: checked ? 18 : 2,
+              width: 16, height: 16, borderRadius: '50%', background: '#fff',
+              transition: 'left 0.2s',
+            }} />
+          </span>
+        </label>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -668,21 +912,21 @@ function SettingsModal({
         style={{
           background: 'var(--bg-secondary, #1e1e2e)',
           border: '1px solid var(--border, #333)',
-          borderRadius: 12, padding: 24, width: 520, maxWidth: '92vw', maxHeight: '85vh', overflow: 'auto',
+          borderRadius: 12, padding: 24, width: 500, maxWidth: '92vw', maxHeight: '85vh', overflow: 'auto',
           boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <h3 style={{ margin: 0, fontSize: 20, color: 'var(--text, #eee)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: 18, color: 'var(--text, #eee)', display: 'flex', alignItems: 'center', gap: 6 }}>
             ⚙️ {t('settings')}
           </h3>
           <button
             onClick={onClose}
             style={{
               background: 'transparent', border: 'none', color: 'var(--text-muted, #888)',
-              cursor: 'pointer', fontSize: 22, padding: 4, display: 'flex', alignItems: 'center'
+              cursor: 'pointer', fontSize: 20, padding: 4, display: 'flex', alignItems: 'center'
             }}
           >
             ✕
@@ -692,7 +936,7 @@ function SettingsModal({
         {loading ? (
           <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 24 }}>Loading...</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {/* ── Language ── */}
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
@@ -743,125 +987,211 @@ function SettingsModal({
               </div>
             </div>
 
-            {/* ── Model Selection ── */}
+            {/* ── Model ── */}
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
-                🤖 {t('model')}
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 12 }}>
+                🤖 Model
               </div>
-              {modelLoading ? (
-                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Loading models...</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {Object.entries(modelProviders).map(([providerName, group]) => (
-                    <div key={providerName}>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span>{providerName}</span>
-                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{group.protocol}</span>
+
+              {/* 当前模型选择 —— 下拉框 */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Active Model</label>
+                {modelLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading...</div>
+                ) : (
+                  <select
+                    value={activeModel}
+                    onChange={e => onModelSelect(e.target.value)}
+                    style={{
+                      width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 13,
+                      border: '1px solid var(--border, #444)', background: 'var(--bg-tertiary)',
+                      color: 'var(--text, #eee)', fontFamily: 'var(--font-mono)', outline: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {Object.entries(modelProviders).map(([providerName, group]) => (
+                      <optgroup key={providerName} label={`${providerName} (${group.protocol})`}>
+                        {group.models.map(modelId => (
+                          <option key={`${providerName}/${modelId}`} value={`${providerName}/${modelId}`}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* 分隔线 + 自定义 API */}
+              <div style={{
+                borderTop: '1px solid var(--border, #333)', paddingTop: 12,
+                display: 'flex', flexDirection: 'column', gap: 8,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>🔌 Custom API</span>
+                  {!showAddForm && (
+                    <button onClick={openAddForm} style={{
+                      padding: '3px 10px', borderRadius: 5, fontSize: 11, cursor: 'pointer',
+                      border: '1px solid var(--accent, #6366f1)', background: 'var(--accent-dim)',
+                      color: 'var(--accent)', fontWeight: 600, fontFamily: 'var(--font-sans)',
+                    }}>
+                      + Add
+                    </button>
+                  )}
+                </div>
+
+                {/* 添加/编辑表单 */}
+                {showAddForm && (
+                  <div style={{
+                    padding: 12, borderRadius: 8, border: '1px solid var(--border, #333)',
+                    background: 'var(--bg-tertiary)', display: 'flex', flexDirection: 'column', gap: 8,
+                  }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <input value={formName} onChange={e => setFormName(e.target.value)}
+                          placeholder="Provider name"
+                          style={inputStyle} />
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {group.models.map(modelId => {
-                          const fullId = `${providerName}/${modelId}`;
-                          const isSelected = activeModel === fullId;
-                          return (
-                            <button
-                              key={modelId}
-                              onClick={() => onModelSelect(fullId)}
-                              style={{
-                                padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
-                                border: isSelected ? '2px solid var(--accent, #6366f1)' : '1px solid var(--border, #444)',
-                                background: isSelected ? 'var(--accent-dim)' : 'transparent',
-                                color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
-                                fontWeight: isSelected ? 600 : 400,
-                                transition: 'all 0.2s',
-                              }}
-                            >
-                              {modelId}
-                            </button>
-                          );
-                        })}
+                      <div style={{ flex: 1 }}>
+                        <select value={formProtocol} onChange={e => setFormProtocol(e.target.value)} style={inputStyle}>
+                          <option value="openai">OpenAI</option>
+                          <option value="openai-compatible">OpenAI Compatible</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="deepseek">DeepSeek</option>
+                          <option value="__custom__">Custom SDK...</option>
+                        </select>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                    {formProtocol === '__custom__' && (
+                      <input value={formSdk} onChange={e => setFormSdk(e.target.value)}
+                        placeholder="SDK package name (e.g. @ai-sdk/anthropic)" style={inputStyle} />
+                    )}
+                    <input value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
+                      placeholder="Base URL (e.g. https://api.openai.com/v1)" style={inputStyle} />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input value={formApiKey} onChange={e => setFormApiKey(e.target.value)}
+                        placeholder={editingProvider ? 'API Key (leave blank to keep)' : 'API Key (optional)'}
+                        type="password" style={{ ...inputStyle, flex: 1 }} />
+                      <input value={formModels} onChange={e => setFormModels(e.target.value)}
+                        placeholder="Models (comma-sep)" style={{ ...inputStyle, flex: 1 }} />
+                    </div>
+                    {customProvError && <div style={{ fontSize: 12, color: 'var(--error, #f87171)' }}>{customProvError}</div>}
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button onClick={resetForm} disabled={formBusy} style={btnSec}>Cancel</button>
+                      <button onClick={handleSaveProvider} disabled={formBusy}
+                        style={{ ...btnPrim, opacity: formBusy ? 0.6 : 1 }}>
+                        {formBusy ? 'Saving...' : editingProvider ? 'Update' : 'Add'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 已有自定义 Provider 列表 */}
+                {customProviders.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {customProviders.map(p => (
+                      <div key={p.name} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '6px 8px', borderRadius: 5, border: '1px solid var(--border, #333)',
+                        background: 'var(--bg-tertiary)', fontSize: 12,
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 1 }}>
+                            {p.name}
+                            <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+                              {p.sdk || p.protocol || 'openai'}
+                            </span>
+                            <span style={{ marginLeft: 4, fontSize: 10, color: p.hasApiKey ? 'var(--accent)' : 'var(--text-muted)' }}>
+                              {p.hasApiKey ? '🔑' : '🔓'}
+                            </span>
+                          </div>
+                          {p.baseUrl && <div style={{ color: 'var(--text-muted)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.baseUrl}</div>}
+                        </div>
+                        <div style={{ display: 'flex', gap: 3, flexShrink: 0, marginLeft: 8 }}>
+                          <button onClick={() => openEditForm(p)} style={btnMini}>Edit</button>
+                          <button onClick={() => handleDeleteProvider(p.name)} style={{ ...btnMini, color: 'var(--error, #f87171)', borderColor: 'rgba(248,113,113,0.3)' }}>✕</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {customProviders.length === 0 && !showAddForm && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No custom providers.</div>
+                )}
+              </div>
             </div>
 
-            {/* ── Font Size ── */}
+            {/* ── Display ── */}
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>🔤 {t('fontSize')}</span>
-                <span style={{ fontSize: 12, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '2px 8px', borderRadius: 4 }}>
-                  {fontSize}px
-                </span>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 12 }}>
+                🎨 Display
               </div>
-              <input
-                type="range"
-                min={12}
-                max={20}
-                value={fontSize}
-                onChange={e => setFontSize(parseInt(e.target.value, 10))}
-                style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }}
-              />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)' }}>
-                <span>12px</span>
-                <span>20px</span>
+
+              {/* Font Size */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>🔤 Font Size</span>
+                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '1px 8px', borderRadius: 4 }}>
+                    {fontSize}px
+                  </span>
+                </div>
+                <input type="range" min={12} max={20} value={fontSize}
+                  onChange={e => setFontSize(parseInt(e.target.value, 10))}
+                  style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }} />
+              </div>
+
+              {/* Toggles */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <ToggleRow label="📦 Compact Messages" desc={compactMessages ? 'Less space between messages' : 'Normal spacing'}
+                  checked={compactMessages} onChange={() => setCompactMessages(!compactMessages)} />
+                <ToggleRow label="🧠 Show Reasoning" desc={showReasoning ? 'Show AI thinking process' : 'Hide thinking process'}
+                  checked={showReasoning} onChange={() => setShowReasoning(!showReasoning)} />
               </div>
             </div>
 
-            {/* ── Toggles ── */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* Compact Messages */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text, #eee)' }}>📦 {t('compactMessages')}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{compactMessages ? 'Less space between messages' : 'Normal spacing'}</div>
-                </div>
-                <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 22, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={compactMessages}
-                    onChange={() => setCompactMessages(!compactMessages)}
-                    style={{ opacity: 0, width: 0, height: 0 }}
-                  />
-                  <span style={{
-                    position: 'absolute', inset: 0, borderRadius: 11,
-                    background: compactMessages ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
-                    transition: 'background 0.2s',
-                  }}>
-                    <span style={{
-                      position: 'absolute', top: 2, left: compactMessages ? 20 : 2,
-                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
-                      transition: 'left 0.2s',
-                    }} />
-                  </span>
-                </label>
+            {/* ── 模型微调参数 ── */}
+            <div style={{ borderTop: '1px solid var(--border, #333)', paddingTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 12 }}>
+                🌡️ Model Fine-Tune
               </div>
-
-              {/* Show Reasoning */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text, #eee)' }}>🧠 {t('showReasoning')}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{showReasoning ? 'Show AI thinking process' : 'Hide thinking process'}</div>
+              {/* Temperature */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Temperature</span>
+                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '1px 8px', borderRadius: 4 }}>{fineTuneTemp.toFixed(1)}</span>
                 </div>
-                <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 22, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={showReasoning}
-                    onChange={() => setShowReasoning(!showReasoning)}
-                    style={{ opacity: 0, width: 0, height: 0 }}
-                  />
-                  <span style={{
-                    position: 'absolute', inset: 0, borderRadius: 11,
-                    background: showReasoning ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
-                    transition: 'background 0.2s',
-                  }}>
-                    <span style={{
-                      position: 'absolute', top: 2, left: showReasoning ? 20 : 2,
-                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
-                      transition: 'left 0.2s',
-                    }} />
-                  </span>
-                </label>
+                <input type="range" min={0} max={2} step={0.1} value={fineTuneTemp}
+                  onChange={e => { const v = parseFloat(e.target.value); setFineTuneTemp(v); sendRpc('model:fine-tune:set', { temperature: v }).catch(() => {}); }}
+                  style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                  <span>精确 (0)</span>
+                  <span>平衡 (0.7)</span>
+                  <span>创意 (2.0)</span>
+                </div>
+              </div>
+              {/* Max Tokens */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Max Tokens</span>
+                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '1px 8px', borderRadius: 4 }}>{fineTuneMaxTokens}</span>
+                </div>
+                <input type="range" min={512} max={32768} step={512} value={fineTuneMaxTokens}
+                  onChange={e => { const v = parseInt(e.target.value, 10); setFineTuneMaxTokens(v); sendRpc('model:fine-tune:set', { maxTokens: v }).catch(() => {}); }}
+                  style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }} />
+              </div>
+              {/* Top-P */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Top-P</span>
+                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '1px 8px', borderRadius: 4 }}>{fineTuneTopP.toFixed(1)}</span>
+                </div>
+                <input type="range" min={0.1} max={1} step={0.1} value={fineTuneTopP}
+                  onChange={e => { const v = parseFloat(e.target.value); setFineTuneTopP(v); sendRpc('model:fine-tune:set', { topP: v }).catch(() => {}); }}
+                  style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                  <span>保守 (0.1)</span>
+                  <span>全部 (1.0)</span>
+                </div>
               </div>
             </div>
 

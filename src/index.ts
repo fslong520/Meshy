@@ -446,6 +446,40 @@ export function searchSkillsWithBias(
     }).map(entry => entry.skill);
 }
 
+// ─── 自定义 Provider 配置持久化 ───
+
+/**
+ * 将 provider 配置写入 .agent/config.json
+ */
+async function persistProviderConfig(
+    rootPath: string,
+    updater: (providers: Record<string, any>) => Record<string, any>,
+): Promise<void> {
+    const configDir = path.join(rootPath, '.agent');
+    const configPath = path.join(configDir, 'config.json');
+
+    // Ensure .agent directory exists
+    await fs.promises.mkdir(configDir, { recursive: true });
+
+    let current: Record<string, any> = {};
+    try {
+        const raw = await fs.promises.readFile(configPath, 'utf-8');
+        current = JSON.parse(raw);
+    } catch {
+        // File doesn't exist or invalid JSON — start fresh
+        current = {};
+    }
+
+    if (!current.providers) {
+        current.providers = {};
+    }
+
+    current.providers = updater(current.providers);
+
+    await fs.promises.writeFile(configPath, JSON.stringify(current, null, 2), 'utf-8');
+    console.log(`[Config] Persisted provider config to ${configPath}`);
+}
+
 export async function runServer(port: number) {
     const config = loadConfig();
     const providerNames = Object.keys(config.providers);
@@ -515,24 +549,41 @@ export async function runServer(port: number) {
             submittedPrompt = payload;
         } else {
             submittedPrompt = payload.prompt || '';
-            contextOpts = { mode: payload.mode, attachments: payload.attachments };
+            contextOpts = {
+                mode: payload.mode,
+                attachments: payload.attachments,
+                temperature: payload.temperature,
+                maxTokens: payload.maxTokens,
+                topP: payload.topP,
+            };
         }
 
         console.log(`\n[Meshy] Received task from Web UI: ${submittedPrompt}`);
         try {
             const isNew = session.history.length === 0;
             if (isNew) {
-                // Auto-name empty session based on prompt
                 session.title = submittedPrompt.slice(0, 30) + (submittedPrompt.length > 30 ? '...' : '');
             }
 
             await engine.runTask(submittedPrompt, contextOpts);
 
-            // Always broadcast session list after a task finishes (so new sessions and new titles appear)
             daemon.broadcast('session:list', { sessions: sessionManager.listSessions() });
-            daemon.broadcast('agent:done', { id });
         } catch (err) {
-            console.error('[Meshy] Task from Web UI failed:', err);
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[Meshy] Task from Web UI failed:', msg);
+            daemon.broadcast('agent:text', {
+                text: `\n⚠️ 任务执行失败: ${msg}`,
+                id: `error-${Date.now()}`,
+            });
+        } finally {
+            // 从 session 历史中取最后一条 assistant 消息的完整内容，附带在 agent:done 中
+            // 解决 SSE 断连导致前端无内容的问题
+            let finalContent = '';
+            const lastAssistantMsg = [...session.history].reverse().find(m => m.role === 'assistant');
+            if (lastAssistantMsg && typeof lastAssistantMsg.content === 'string') {
+                finalContent = lastAssistantMsg.content;
+            }
+            daemon.broadcast('agent:done', { id, finalContent });
         }
     });
 
@@ -623,7 +674,10 @@ export async function runServer(port: number) {
         const newSession = sessionManager.createSession();
         console.log(`[Meshy] Web UI created new session: ${newSession.id}`);
 
-        // Fix: Explicitly update the global session state and task engine
+        // Fix: Persist the new session to disk immediately so session:switch can load it
+        sessionManager.saveSession(newSession);
+
+        // Explicitly update the global session state and task engine
         session = newSession;
         engine.setSession(newSession);
 
@@ -633,6 +687,34 @@ export async function runServer(port: number) {
         });
     });
 
+    // ── 模型微调参数存取 ──
+    // 用 preferences 表持久化（通过 activeWorkspace.memoryStore）
+    daemon.on('model:fine-tune:get', async (_ws: import('ws').WebSocket, msgId: string) => {
+        try {
+            const temp = await activeWorkspace.memoryStore.getPreference('fine_tune_temperature');
+            const tokens = await activeWorkspace.memoryStore.getPreference('fine_tune_max_tokens');
+            const topP = await activeWorkspace.memoryStore.getPreference('fine_tune_top_p');
+            daemon.sendResponse(_ws, msgId, {
+                temperature: temp ? parseFloat(temp) : 0.7,
+                maxTokens: tokens ? parseInt(tokens, 10) : 4096,
+                topP: topP ? parseFloat(topP) : 1.0,
+            });
+        } catch { daemon.sendResponse(_ws, msgId, { temperature: 0.7, maxTokens: 4096, topP: 1.0 }); }
+    });
+
+    daemon.on('model:fine-tune:set', async (params: any, ws: import('ws').WebSocket, msgId: string) => {
+        try {
+            const store = activeWorkspace.memoryStore;
+            if (params.temperature !== undefined) await store.setPreference('fine_tune_temperature', String(params.temperature));
+            if (params.maxTokens !== undefined) await store.setPreference('fine_tune_max_tokens', String(params.maxTokens));
+            if (params.topP !== undefined) await store.setPreference('fine_tune_top_p', String(params.topP));
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    // ── 当前 session 状态 ──
     daemon.on('session:get', (ws: import('ws').WebSocket, msgId: string) => {
         // 返回当前活跃 session 的 replay 数据
         const replay = exportReplay(session);
@@ -779,6 +861,166 @@ export async function runServer(port: number) {
         } catch (err: any) {
             daemon.sendResponse(ws, msgId, { success: false, error: err.message });
         }
+    });
+
+    // ─── 自定义 Provider 管理 RPC ───
+
+    daemon.on('provider:add', async (params: any, ws: any, msgId: string) => {
+        try {
+            const { name, protocol, sdk, baseUrl, apiKey, models } = params || {};
+            if (!name || typeof name !== 'string') {
+                throw new Error('Provider name is required and must be a string.');
+            }
+            if (config.providers[name]) {
+                throw new Error(`Provider "${name}" already exists.`);
+            }
+
+            const modelsRecord: Record<string, { name?: string }> = {};
+            if (Array.isArray(models)) {
+                for (const m of models) {
+                    modelsRecord[typeof m === 'string' ? m : m.id] = { name: m.name || m };
+                }
+            }
+
+            // 更新内存中的 config
+            config.providers[name] = {
+                protocol: protocol || 'openai',
+                sdk: sdk || undefined,
+                baseUrl: baseUrl || undefined,
+                apiKey: apiKey || '',
+                models: Object.keys(modelsRecord).length > 0 ? modelsRecord : undefined,
+            };
+
+            // 持久化到 .agent/config.json
+            await persistProviderConfig(activeWorkspace.rootPath, (providers) => {
+                providers[name] = {
+                    protocol: config.providers[name].protocol,
+                    ...(sdk ? { sdk } : {}),
+                    ...(baseUrl ? { baseUrl } : {}),
+                    ...(apiKey ? { apiKey } : {}),
+                    ...(Object.keys(modelsRecord).length > 0 ? { models: modelsRecord } : {}),
+                };
+                return providers;
+            });
+
+            // 清除模型缓存，使 model:list 能获取新 provider
+            providerResolver.clearModelCache();
+
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('provider:remove', async (params: any, ws: any, msgId: string) => {
+        try {
+            const { name } = params || {};
+            if (!name || typeof name !== 'string') {
+                throw new Error('Provider name is required.');
+            }
+            if (!config.providers[name]) {
+                throw new Error(`Provider "${name}" not found.`);
+            }
+
+            // 防止删除内置 provider（opencode、local-ernie）
+            const builtInProviders = ['opencode', 'local-ernie'];
+            if (builtInProviders.includes(name)) {
+                throw new Error(`Cannot remove built-in provider "${name}".`);
+            }
+
+            // 从内存中删除
+            delete config.providers[name];
+
+            // 持久化
+            await persistProviderConfig(activeWorkspace.rootPath, (providers) => {
+                delete providers[name];
+                return providers;
+            });
+
+            providerResolver.clearModelCache();
+
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('provider:update', async (params: any, ws: any, msgId: string) => {
+        try {
+            const { name, protocol, sdk, baseUrl, apiKey, models } = params || {};
+            if (!name || typeof name !== 'string') {
+                throw new Error('Provider name is required.');
+            }
+            if (!config.providers[name]) {
+                throw new Error(`Provider "${name}" not found.`);
+            }
+
+            // 更新内存中的 config（逐字段覆盖）
+            const existing = config.providers[name];
+            if (protocol !== undefined) existing.protocol = protocol;
+            if (sdk !== undefined) existing.sdk = sdk;
+            if (baseUrl !== undefined) existing.baseUrl = baseUrl;
+            if (apiKey !== undefined) existing.apiKey = apiKey;
+
+            if (Array.isArray(models)) {
+                const modelsRecord: Record<string, { name?: string }> = {};
+                for (const m of models) {
+                    modelsRecord[typeof m === 'string' ? m : m.id] = { name: m.name || m };
+                }
+                existing.models = Object.keys(modelsRecord).length > 0 ? modelsRecord : undefined;
+            }
+
+            // 持久化
+            await persistProviderConfig(activeWorkspace.rootPath, (providers) => {
+                const target = providers[name] || {};
+                if (protocol !== undefined) target.protocol = protocol;
+                if (sdk !== undefined) target.sdk = sdk;
+                if (baseUrl !== undefined) target.baseUrl = baseUrl;
+                if (apiKey !== undefined) target.apiKey = apiKey;
+                if (Array.isArray(models)) {
+                    const modelsRecord: Record<string, { name?: string }> = {};
+                    for (const m of models) {
+                        modelsRecord[typeof m === 'string' ? m : m.id] = { name: m.name || m };
+                    }
+                    target.models = Object.keys(modelsRecord).length > 0 ? modelsRecord : undefined;
+                }
+                providers[name] = target;
+                return providers;
+            });
+
+            providerResolver.clearModelCache();
+
+            daemon.sendResponse(ws, msgId, { success: true });
+        } catch (err: any) {
+            daemon.sendResponse(ws, msgId, { success: false, error: err.message });
+        }
+    });
+
+    daemon.on('provider:list', (ws: any, msgId: string) => {
+        const customProviders: Array<{
+            name: string;
+            protocol?: string;
+            sdk?: string;
+            baseUrl?: string;
+            hasApiKey: boolean;
+            models: string[];
+        }> = [];
+
+        const builtInProviders = ['opencode', 'local-ernie'];
+        for (const [name, cfg] of Object.entries(config.providers)) {
+            if (builtInProviders.includes(name)) continue;
+            const models = cfg.models ? Object.keys(cfg.models) : [];
+            customProviders.push({
+                name,
+                protocol: cfg.protocol,
+                sdk: cfg.sdk,
+                baseUrl: cfg.baseUrl,
+                hasApiKey: !!cfg.apiKey && !cfg.apiKey.startsWith('placeholder'),
+                models,
+            });
+        }
+
+        daemon.sendResponse(ws, msgId, { providers: customProviders });
     });
 
     daemon.on('agent:list', (ws, msgId) => {
@@ -1132,11 +1374,10 @@ function printUsage(): void {
 Meshy — Advanced Multi-Agent AI Framework
 
 Usage:
-  meshy                              进入交互式模式 (REPL, 未来版本)
+  meshy [prompt]                      交互式 REPL (无参数) 或一次性执行 (有参数)
   meshy server [--port 9120]         启动 Web Dashboard + WebSocket 守护进程
   meshy -p "prompt"                  一次性执行任务
   meshy run "prompt"                 一次性执行任务 (OpenCode 风格)
-  meshy "prompt"                     一次性执行任务 (简写)
 
 Options:
   -p, --print <prompt>    指定要执行的 Prompt (一次性模式)
@@ -1146,14 +1387,143 @@ Options:
   --port <number>         Web Server 端口 (默认 9120)
   --daemon                启动 Web Server (兼容旧写法, 等同于 server)
 
+REPL Commands:
+  /exit, /quit            退出交互式模式
+  /help                   显示此帮助
+  /clear                  清空当前会话上下文
+  /model <name>           切换模型 (e.g. /model zeabur/gpt-4o)
+
 Examples:
+  meshy                   进入交互式 REPL
   meshy server
   meshy -p "Hello, are you ready?"
   meshy -m zeabur/gpt-4o "解释这段代码"
   meshy run -m openai/o3-mini "生成一个快速排序"
-  meshy -y "批量重命名所有文件"
   cat main.go | meshy -p "优化这段代码"
 `);
+}
+
+// ─── 交互式 REPL ───
+
+/**
+ * 交互式 REPL：一问一答，持续对话，如 OpenCode 之风。
+ */
+async function runRepl(options?: { model?: string | null }) {
+    const config = loadConfig();
+    const providerNames = Object.keys(config.providers);
+    console.log(`[Meshy] REPL mode. Providers: [${providerNames.join(', ')}] | Default: ${config.models.default}`);
+    if (options?.model) console.log(`[Meshy] Model override: ${options.model}`);
+
+    const { ProviderResolver } = await import('./core/llm/resolver.js');
+    const providerResolver = new ProviderResolver(config);
+    if (options?.model) providerResolver.switchModel(options.model);
+
+    const workspaceManager = new WorkspaceManager(providerResolver);
+    const activeWorkspace = workspaceManager.getWorkspace(process.cwd());
+    const sessionManager = new SessionManager(activeWorkspace.rootPath);
+    const session = sessionManager.createSession();
+
+    const engine = new TaskEngine(providerResolver, activeWorkspace, session, {
+        maxRetries: config.system.maxRetries,
+        executionMode: 'yolo' as any,
+    });
+    engine.getSkillRegistry().scan(activeWorkspace.rootPath);
+
+    const readline = await import('readline');
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        prompt: '\n>>> ',
+    });
+
+    // 抑制引擎内部 daemon broadcast 调用（REPL 模式无 daemon）
+    const origBroadcast = (engine as any).daemon?.broadcast;
+    if ((engine as any).daemon) {
+        (engine as any).daemon.broadcast = () => {};
+    }
+
+    console.log(`\n${'─'.repeat(48)}`);
+    console.log('  REPL 交互式模式  输入 /exit 退出  /help 帮助');
+    console.log(`${'─'.repeat(48)}`);
+
+    rl.prompt();
+
+    rl.on('line', async (line: string) => {
+        const input = line.trim();
+
+        if (!input) {
+            rl.prompt();
+            return;
+        }
+
+        // 处理 REPL 内部命令
+        if (input.startsWith('/')) {
+            const parts = input.slice(1).split(/\s+/);
+            const cmd = parts[0].toLowerCase();
+
+            switch (cmd) {
+                case 'exit':
+                case 'quit':
+                    console.log('[Meshy] 再见。');
+                    engine.shutdown();
+                    rl.close();
+                    process.exit(0);
+                    return;
+
+                case 'help':
+                    console.log(`
+REPL 命令:
+  /exit, /quit    退出
+  /help           显示此帮助
+  /clear          清空当前会话上下文
+  /model <name>   切换模型
+                        `);
+                    rl.prompt();
+                    return;
+
+                case 'clear':
+                    engine.setSession(sessionManager.createSession());
+                    console.log('[Meshy] 会话已清空。');
+                    rl.prompt();
+                    return;
+
+                case 'model':
+                    if (parts[1]) {
+                        try {
+                            providerResolver.switchModel(parts[1]);
+                            console.log(`[Meshy] 已切换至: ${parts[1]}`);
+                        } catch (err: unknown) {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            console.log(`[Meshy] 切换失败: ${msg}`);
+                        }
+                    } else {
+                        console.log('[Meshy] 用法: /model <providerName/modelId>');
+                    }
+                    rl.prompt();
+                    return;
+
+                default:
+                    console.log(`[Meshy] 未知命令: /${cmd}。输入 /help 查看可用命令。`);
+                    rl.prompt();
+                    return;
+            }
+        }
+
+        // 执行任务
+        try {
+            await engine.runTask(input);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(`\n[Error] ${msg}`);
+        }
+
+        rl.prompt();
+    });
+
+    rl.on('close', () => {
+        engine.shutdown();
+        process.exit(0);
+    });
 }
 
 // ─── CLI 入口 ───
@@ -1185,8 +1555,13 @@ if (isMainModule) {
         }
 
         case 'interactive':
+            runRepl({ model: parsed.model }).catch((err) => {
+                console.error('[Meshy] REPL error:', err);
+                process.exit(1);
+            });
+            break;
+
         default:
-            // 无参数：显示帮助信息（未来可以进入 REPL）
             printUsage();
             break;
     }

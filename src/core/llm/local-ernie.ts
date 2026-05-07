@@ -49,6 +49,31 @@ function nextId(): string {
 const REQUEST_TIMEOUT_MS = 20_000; // 单次分类请求超时 20s
 const CHAT_TIMEOUT_MS = 120_000;   // chat 生成请求超时 120s（CPU 推理慢）
 
+// ─── 全局单例缓存（挂 global 而非模块级，tsx 热更新时不被重置） ───
+// 不同 TaskEngine 实例复用同一 Python 子进程，避免重复加载模型
+const GLOBAL_KEY = '__meshy_ernie_singleton__';
+function getGlobalERNIE(): LocalERNIEAdapter | null {
+    return (global as any)[GLOBAL_KEY]?.instance ?? null;
+}
+function setGlobalERNIE(instance: LocalERNIEAdapter | null): void {
+    (global as any)[GLOBAL_KEY] = { instance, refCount: getRefCount() };
+}
+function getRefCount(): number {
+    return (global as any)[GLOBAL_KEY]?.refCount ?? 0;
+}
+function incRefCount(): number {
+    const ref = (global as any)[GLOBAL_KEY] ?? { instance: null, refCount: 0 };
+    ref.refCount++;
+    (global as any)[GLOBAL_KEY] = ref;
+    return ref.refCount;
+}
+function decRefCount(): number {
+    const ref = (global as any)[GLOBAL_KEY] ?? { instance: null, refCount: 0 };
+    ref.refCount = Math.max(0, ref.refCount - 1);
+    (global as any)[GLOBAL_KEY] = ref;
+    return ref.refCount;
+}
+
 // ─── 适配器实现 ───
 
 export class LocalERNIEAdapter implements ILLMProvider {
@@ -65,14 +90,31 @@ export class LocalERNIEAdapter implements ILLMProvider {
         }
     >();
 
-    private processPath: string;
+    private processPath: string = '';
     private started = false;
     private starting = false;
 
     /** 并发锁，防止同时发出多个启动请求 */
     private startPromise: Promise<void> | null = null;
 
+    /**
+     * 返回真正的全局实例（影子实例将所有调用委托给它）
+     */
+    private _delegate(): LocalERNIEAdapter {
+        const g = getGlobalERNIE();
+        return (this !== g && g) ? g : this;
+    }
+
     constructor() {
+        const existing = getGlobalERNIE();
+        if (existing) {
+            incRefCount();
+            return;
+        }
+
+        setGlobalERNIE(this);
+        incRefCount();
+
         // 在 meshy 项目树中定位 Python 脚本
         const searchPaths = [
             path.resolve(__dirname, '..', '..', '..', 'scripts', 'ernie_intent_server.py'),
@@ -90,7 +132,7 @@ export class LocalERNIEAdapter implements ILLMProvider {
 
         if (!resolvedPath) {
             console.warn('[LocalERNIEAdapter] Python script not found. Attempting relative path:', searchPaths[0]);
-            resolvedPath = searchPaths[0]; // 尝试用第一个路径，即使不存在
+            resolvedPath = searchPaths[0];
         }
 
         this.processPath = resolvedPath;
@@ -100,110 +142,103 @@ export class LocalERNIEAdapter implements ILLMProvider {
      * 启动 Python 子进程（首次请求时自动调用）
      */
     private async ensureStarted(): Promise<void> {
-        if (this.started) return;
-        if (this.startPromise) return this.startPromise;
+        const _ = this._delegate();
+        if (_.started) return;
+        if (_.startPromise) return _.startPromise;
 
-        this.startPromise = this._startProcess();
-        return this.startPromise;
+        _.startPromise = _._startProcess();
+        return _.startPromise;
     }
 
     private _startProcess(): Promise<void> {
+        const _ = this._delegate();
         return new Promise((resolve, reject) => {
-            if (this.started) {
+            if (_.started) {
                 resolve();
                 return;
             }
 
-            if (!fs.existsSync(this.processPath)) {
+            if (!fs.existsSync(_.processPath)) {
                 console.warn(
-                    `[LocalERNIEAdapter] Python script not found at "${this.processPath}". ` +
+                    `[LocalERNIEAdapter] Python script not found at "${_.processPath}". ` +
                     'Intent classification will fall back to keyword matching only.'
                 );
-                this.started = false;
-                resolve(); // 不阻塞主流程，后续请求会走 fallback
+                _.started = false;
+                resolve();
                 return;
             }
 
-            this.starting = true;
+            _.starting = true;
 
             try {
-                // 尝试使用 python3，失败则回退到 python
-                const pythonCmd = this._detectPython();
+                const pythonCmd = _._detectPython();
 
-                console.log(`[LocalERNIEAdapter] Starting Python subprocess: ${pythonCmd} ${this.processPath}`);
+                console.log(`[LocalERNIEAdapter] Starting Python subprocess: ${pythonCmd} ${_.processPath}`);
 
-                this.pythonProcess = spawn(pythonCmd, [this.processPath], {
+                _.pythonProcess = spawn(pythonCmd, [_.processPath], {
                     stdio: ['pipe', 'pipe', 'pipe'],
                     env: { ...process.env },
                 });
 
-                this.rl = createInterface({
-                    input: this.pythonProcess.stdout!,
+                _.rl = createInterface({
+                    input: _.pythonProcess.stdout!,
                     crlfDelay: Infinity,
                 });
 
-                // 处理 stderr（打印为日志）
-                this.pythonProcess.stderr!.on('data', (data: Buffer) => {
+                _.pythonProcess.stderr!.on('data', (data: Buffer) => {
                     const msg = data.toString().trim();
-                    if (msg) {
-                        console.log(`[ERNIE] ${msg}`);
-                    }
+                    if (msg) console.log(`[ERNIE] ${msg}`);
                 });
 
-                // 处理每行 stdout 响应
-                this.rl.on('line', (line: string) => {
+                _.rl.on('line', (line: string) => {
                     line = line.trim();
                     if (!line) return;
-
                     try {
                         const response = JSON.parse(line);
                         const reqId = response.id;
-                        const pending = this.pendingRequests.get(reqId);
-
+                        const pending = _.pendingRequests.get(reqId);
                         if (pending) {
-                            clearTimeout(pending.timer);
-                            this.pendingRequests.delete(reqId);
-                            pending.resolve(response);
+                            // 流式模式：done=false 表示还有后续 token，不清除 pending
+                            if (response.done === false) {
+                                pending.resolve(response);
+                            } else {
+                                clearTimeout(pending.timer);
+                                _.pendingRequests.delete(reqId);
+                                pending.resolve(response);
+                            }
                         }
-                    } catch {
-                        // 非 JSON 行忽略（如初始化日志）
-                    }
+                    } catch { /* ignore non-JSON lines */ }
                 });
 
-                // 子进程退出处理
-                this.pythonProcess.on('exit', (code, signal) => {
+                _.pythonProcess.on('exit', (code, signal) => {
                     console.log(`[LocalERNIEAdapter] Python process exited (code: ${code}, signal: ${signal})`);
-                    this.started = false;
-                    this.starting = false;
-                    this.pythonProcess = null;
-                    this.rl = null;
-
-                    // 拒绝所有待处理的请求
-                    for (const [id, pending] of this.pendingRequests) {
+                    _.started = false;
+                    _.starting = false;
+                    _.pythonProcess = null;
+                    _.rl = null;
+                    for (const [id, pending] of _.pendingRequests) {
                         clearTimeout(pending.timer);
                         pending.reject(new Error(`Python process exited with code ${code}`));
                     }
-                    this.pendingRequests.clear();
+                    _.pendingRequests.clear();
                 });
 
-                this.pythonProcess.on('error', (err) => {
+                _.pythonProcess.on('error', (err) => {
                     console.error(`[LocalERNIEAdapter] Python process error: ${err.message}`);
-                    this.started = false;
-                    this.starting = false;
+                    _.started = false;
+                    _.starting = false;
                 });
 
-                // 等待初始化的"ready"信号（从 stderr 输出）
-                // 没有严格等待，后续请求会排队，lazy load 会在首次请求时触发
-                this.started = true;
-                this.starting = false;
+                _.started = true;
+                _.starting = false;
                 console.log('[LocalERNIEAdapter] Python subprocess started (lazy model loading on first request).');
                 resolve();
 
             } catch (err: any) {
-                this.started = false;
-                this.starting = false;
+                _.started = false;
+                _.starting = false;
                 console.error(`[LocalERNIEAdapter] Failed to start Python process: ${err.message}`);
-                resolve(); // 不阻塞，后续请求走 fallback
+                resolve();
             }
         });
     }
@@ -244,24 +279,19 @@ export class LocalERNIEAdapter implements ILLMProvider {
         userInput: string,
         localFallback?: IntentClassification
     ): Promise<IntentClassification> {
-        // 1. 先做本地快速分类（零模型开销）
-        const keywordResult = this._classifyByKeywords(userInput);
+        const _ = this._delegate();
+        const keywordResult = _._classifyByKeywords(userInput);
 
-        // 如果关键词匹配置信度足够高（>= 0.3），直接返回，不劳烦小模型
         if (keywordResult.confidence >= 0.3) {
             return keywordResult;
         }
 
-        // 2. 置信度不足时，尝试调用本地 ERNIE 小模型
         try {
-            await this.ensureStarted();
-
-            if (!this.started || !this.pythonProcess || !this.pythonProcess.stdin) {
-                // 子进程未启动成功，返回关键词结果
+            await _.ensureStarted();
+            if (!_.started || !_.pythonProcess || !_.pythonProcess.stdin) {
                 return keywordResult;
             }
-
-            const result = await this._requestLLM(userInput);
+            const result = await _._requestLLM(userInput);
             if (result && result.intent && result.confidence > 0) {
                 console.log(
                     `[LocalERNIEAdapter] ERNIE-0.3B classified intent: "${result.intent}" (confidence: ${result.confidence.toFixed(2)})`
@@ -272,7 +302,6 @@ export class LocalERNIEAdapter implements ILLMProvider {
                     reasoning: result.reasoning || 'classified by ERNIE-4.5-0.3B',
                 };
             }
-
             return keywordResult;
         } catch (err: any) {
             console.warn(`[LocalERNIEAdapter] ERNIE classification failed: ${err.message}. Using keyword fallback.`);
@@ -284,42 +313,30 @@ export class LocalERNIEAdapter implements ILLMProvider {
      * 向 Python 子进程发送分类请求
      */
     private _requestLLM(userInput: string): Promise<IntentClassification> {
+        const _ = this._delegate();
         return new Promise((resolve, reject) => {
-            if (!this.pythonProcess || !this.pythonProcess.stdin) {
+            if (!_.pythonProcess || !_.pythonProcess.stdin) {
                 reject(new Error('Python process not available'));
                 return;
             }
-
             const id = nextId();
-
             const timer = setTimeout(() => {
-                this.pendingRequests.delete(id);
+                _.pendingRequests.delete(id);
                 reject(new Error(`ERNIE classification request timed out after ${REQUEST_TIMEOUT_MS}ms`));
             }, REQUEST_TIMEOUT_MS);
-
-            this.pendingRequests.set(id, {
+            _.pendingRequests.set(id, {
                 resolve: (response: any) => {
-                    if (response.error) {
-                        reject(new Error(response.error));
-                    } else {
-                        resolve({
-                            intent: response.intent || 'unknown',
-                            confidence: response.confidence ?? 0,
-                            reasoning: response.reasoning || '',
-                        });
-                    }
+                    if (response.error) reject(new Error(response.error));
+                    else resolve({
+                        intent: response.intent || 'unknown',
+                        confidence: response.confidence ?? 0,
+                        reasoning: response.reasoning || '',
+                    });
                 },
                 reject,
                 timer,
             });
-
-            const request = JSON.stringify({
-                id,
-                mode: 'classify',
-                text: userInput,
-            });
-
-            this.pythonProcess.stdin.write(request + '\n');
+            _.pythonProcess.stdin.write(JSON.stringify({ id, mode: 'classify', text: userInput }) + '\n');
         });
     }
 
@@ -368,80 +385,42 @@ export class LocalERNIEAdapter implements ILLMProvider {
      * 健康检查：查询 Python 子进程状态
      */
     public async healthCheck(): Promise<HealthStatus> {
+        const _ = this._delegate();
         try {
-            await this.ensureStarted();
-
-            if (!this.started || !this.pythonProcess || !this.pythonProcess.stdin) {
-                return {
-                    loaded: false,
-                    model: 'PaddlePaddle/ERNIE-4.5-0.3B-PT',
-                    error: 'Python subprocess not available',
-                    categories: [],
-                };
+            await _.ensureStarted();
+            if (!_.started || !_.pythonProcess || !_.pythonProcess.stdin) {
+                return { loaded: false, model: 'PaddlePaddle/ERNIE-4.5-0.3B-PT', error: 'Python subprocess not available', categories: [] };
             }
-
-            const result = await this._request<HealthStatus>('health');
-            return result;
+            return await _._request<HealthStatus>('health');
         } catch {
-            return {
-                loaded: false,
-                model: 'PaddlePaddle/ERNIE-4.5-0.3B-PT',
-                error: 'Health check failed',
-                categories: [],
-            };
+            return { loaded: false, model: 'PaddlePaddle/ERNIE-4.5-0.3B-PT', error: 'Health check failed', categories: [] };
         }
     }
 
-    /**
-     * 通用请求方法
-     */
     private _request<T>(mode: string, data?: Record<string, any>, customTimeout?: number): Promise<T> {
+        const _ = this._delegate();
         return new Promise((resolve, reject) => {
-            if (!this.pythonProcess || !this.pythonProcess.stdin) {
+            if (!_.pythonProcess || !_.pythonProcess.stdin) {
                 reject(new Error('Python process not available'));
                 return;
             }
-
             const id = nextId();
             const timer = setTimeout(() => {
-                this.pendingRequests.delete(id);
+                _.pendingRequests.delete(id);
                 reject(new Error(`Request "${mode}" timed out`));
             }, customTimeout ?? REQUEST_TIMEOUT_MS);
-
-            this.pendingRequests.set(id, {
-                resolve,
-                reject,
-                timer,
-            });
-
-            const request = JSON.stringify({ id, mode, ...data });
-            this.pythonProcess.stdin.write(request + '\n');
+            _.pendingRequests.set(id, { resolve, reject, timer });
+            _.pythonProcess.stdin.write(JSON.stringify({ id, mode, ...data }) + '\n');
         });
     }
 
-    /**
-     * 用本地模型生成文本回复（兜底生成模式）。
-     * 当所有远程 API 都不可用时，由本地小模型直接回复用户。
-     * 通过 "chat" 模式发送到 Python 子进程。
-     */
     public async chat(userInput: string, maxTokens: number = 512): Promise<string> {
+        const _ = this._delegate();
         try {
-            await this.ensureStarted();
-
-            if (!this.started || !this.pythonProcess || !this.pythonProcess.stdin) {
-                return '[本地模型不可用]';
-            }
-
-            // chat 生成需要更长时间（CPU 推理）
-            const result = await this._request<{ response: string; tokens: number }>('chat', {
-                text: userInput,
-                max_tokens: maxTokens,
-            }, CHAT_TIMEOUT_MS);
-
-            if (result && result.response) {
-                return result.response;
-            }
-            return '[本地模型未生成回复]';
+            await _.ensureStarted();
+            if (!_.started || !_.pythonProcess || !_.pythonProcess.stdin) return '[本地模型不可用]';
+            const result = await _._request<{ response: string; tokens: number }>('chat', { text: userInput, max_tokens: maxTokens }, CHAT_TIMEOUT_MS);
+            return result?.response ?? '[本地模型未生成回复]';
         } catch (err: any) {
             return `[本地模型回复出错: ${err.message}]`;
         }
@@ -450,29 +429,64 @@ export class LocalERNIEAdapter implements ILLMProvider {
     /**
      * 实现 ILLMProvider.generateResponseStream
      *
-     * 当本地小模型被用作兜底生成器时，通过此方法将回复流式返回。
-     * 这是 ILLMProvider 接口的必要实现。
+     * 真流式：向 Python 发 stream_chat 请求，逐行读取 token 转发。
      */
     async generateResponseStream(
         prompt: StandardPrompt,
         onEvent: (event: AgentMessageEvent) => void,
         abortSignal?: AbortSignal
     ): Promise<void> {
-        // 拼接用户消息
+        const _ = this._delegate();
         const userMessages = prompt.messages
             .filter(m => m.role === 'user')
             .map(m => (typeof m.content === 'string' ? m.content : ''))
             .join('\n');
-
         if (!userMessages) {
             onEvent({ type: 'error', data: 'No user message found' });
             onEvent({ type: 'done' });
             return;
         }
 
-        const response = await this.chat(userMessages, 512);
-        onEvent({ type: 'text', data: response });
-        onEvent({ type: 'done' });
+        await _.ensureStarted();
+        if (!_.started || !_.pythonProcess || !_.pythonProcess.stdin) {
+            onEvent({ type: 'text', data: '[本地模型不可用]', replace: true });
+            onEvent({ type: 'done' });
+            return;
+        }
+
+        const id = nextId();
+        let fullClean = '';
+        let resolvePromise: (() => void) | null = null;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+        const reader = (line: string) => {
+            try {
+                const resp = JSON.parse(line.trim());
+                if (resp.id !== id) return;
+                if (resp.done) {
+                    if (timeoutId) clearTimeout(timeoutId);
+                    _.rl?.removeListener('line', reader);
+                    onEvent({ type: 'done' });
+                    if (resolvePromise) resolvePromise();
+                } else if (resp.text) {
+                    fullClean += resp.text;
+                    const clean = fullClean.replace(/<\/?s>/g, '').replace(/<\|endoftext\|>/g, '').replace(/<\|im_end\|>/g, '').replace(/<\|im_start\|>/g, '');
+                    onEvent({ type: 'text', data: clean, replace: true });
+                }
+            } catch {}
+        };
+
+        _.rl?.on('line', reader);
+        _.pythonProcess.stdin.write(JSON.stringify({ id, mode: 'stream_chat', text: userMessages, max_tokens: 512 }) + '\n');
+
+        await new Promise<void>((resolve) => {
+            resolvePromise = resolve;
+            timeoutId = setTimeout(() => {
+                _.rl?.removeListener('line', reader);
+                onEvent({ type: 'done' });
+                resolve();
+            }, 60_000);
+        });
     }
 
     /**
@@ -484,34 +498,33 @@ export class LocalERNIEAdapter implements ILLMProvider {
     }
 
     /**
-     * Shutdown the Python child process
+     * Shutdown the Python child process (引用计数归零时才真正关闭)
      */
     public shutdown(): void {
-        if (this.pythonProcess) {
-            try {
-                this.pythonProcess.stdin?.write(JSON.stringify({ id: 'shutdown', mode: 'unload' }) + '\n');
-                this.pythonProcess.kill('SIGTERM');
+        const remaining = decRefCount();
+        const g = getGlobalERNIE();
+        if (this !== g) return;  // 影子实例，不负责关闭
+        if (remaining > 0) return;  // 还有引用户，不关闭
 
-                // 5秒后强制杀死
-                setTimeout(() => {
-                    if (this.pythonProcess) {
-                        this.pythonProcess.kill('SIGKILL');
-                    }
-                }, 5000);
-            } catch {
-                // 忽略关闭时的错误
-            }
+        const _ = this._delegate();
+        if (_.pythonProcess) {
+            try {
+                _.pythonProcess.stdin?.write(JSON.stringify({ id: 'shutdown', mode: 'unload' }) + '\n');
+                _.pythonProcess.kill('SIGTERM');
+                setTimeout(() => { if (_.pythonProcess) _.pythonProcess.kill('SIGKILL'); }, 5000);
+            } catch { /* ignore */ }
         }
 
-        this.pythonProcess = null;
-        this.rl = null;
-        this.started = false;
+        _.pythonProcess = null;
+        _.rl = null;
+        _.started = false;
 
-        // 拒绝所有待处理请求
-        for (const [id, pending] of this.pendingRequests) {
+        for (const [id, pending] of _.pendingRequests) {
             clearTimeout(pending.timer);
             pending.reject(new Error('Adapter shutting down'));
         }
-        this.pendingRequests.clear();
+        _.pendingRequests.clear();
+
+        setGlobalERNIE(null);
     }
 }

@@ -18,9 +18,10 @@ interface Props {
     disabled?: boolean;
     bbOpen?: boolean;
     onToggleBb?: () => void;
+    modelListVersion?: number;
 }
 
-export function InputArea({ onSend, disabled, bbOpen, onToggleBb }: Props) {
+export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersion }: Props) {
     const [text, setText] = useState('')
     const [attachments, setAttachments] = useState<{ name: string, type: string, data: string }[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -67,7 +68,7 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb }: Props) {
                 setMentionItems(res.items)
             }
         })
-    }, [])
+    }, [modelListVersion]) // 当 modelListVersion 变化时重新拉取模型列表
 
     const handleModelChange = (newModel: string) => {
         setActiveModel(newModel)

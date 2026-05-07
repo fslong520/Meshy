@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { sendRpc, useEvent } from '../store/ws'
-import { Settings, Plus, MessageSquare } from 'lucide-react'
+import { Settings, Plus, MessageSquare, Trash2 } from 'lucide-react'
 
 interface SessionInfo {
     id: string;
@@ -65,9 +65,22 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
         })
     }, [onSessionSwitch])
 
-    const handleSwitchSession = useCallback((sessionId: string, title?: string) => {
-        onSessionSwitch?.(sessionId, title)
-    }, [onSessionSwitch])
+  const handleSwitchSession = useCallback((sessionId: string, title?: string) => {
+    onSessionSwitch?.(sessionId, title)
+  }, [onSessionSwitch])
+
+  const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation() // 防止触发 session 切换
+    if (!window.confirm('确定删除此会话？此操作不可撤销。')) return
+    try {
+      const res = await sendRpc<{ success: boolean; activeSessionId?: string }>('session:delete', { id: sessionId })
+      if (!res.success) throw new Error('删除失败')
+      refreshSessions()
+      // 如果删除的是当前活跃会话，父组件会收到 session:list 事件自动处理
+    } catch (err: any) {
+      alert(`删除失败: ${err.message}`)
+    }
+  }, [refreshSessions])
 
     const formatTime = (iso: string) => {
         if (!iso || iso === 'unknown') return ''
@@ -183,6 +196,13 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
                                 {formatTime(s.updatedAt)}
                             </div>
                         </div>
+                        <button
+                            className="session-delete-btn"
+                            onClick={(e) => handleDeleteSession(e, s.id)}
+                            title="删除此会话"
+                        >
+                            <Trash2 size={12} />
+                        </button>
                     </div>
                 ))}
             </div>

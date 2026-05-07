@@ -59,6 +59,7 @@ export interface RpcMessage {
 // ─── 服务端事件类型 ───
 export type DaemonEventType =
     | 'agent:text'            // Agent 流式文本输出
+    | 'agent:reasoning'       // Agent 思考过程（推理模型的 reasoning_content）
     | 'agent:tool_call'       // Agent 发起工具调用
     | 'agent:tool_result'     // 工具执行结果
     | 'agent:policy_decision' // 工具策略决策事件（allow/deny + reason）
@@ -130,6 +131,9 @@ export class DaemonServer extends EventEmitter {
                     }
                 }
                 this.sseClients.clear();
+
+                // 禁用 Nagle 算法，确保每个 write 立即发送，不缓冲
+                res.socket?.setNoDelay(true);
 
                 // 发送连接成功事件
                 res.write(`data: ${JSON.stringify({ type: 'event', name: 'server.connected', data: {} })}\n\n`);
@@ -570,6 +574,26 @@ export class DaemonServer extends EventEmitter {
 
             case 'tool:policy:history': {
                 this.emit('tool:policy:history', ws, msg.id);
+                break;
+            }
+
+            case 'provider:add': {
+                this.emit('provider:add', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'provider:remove': {
+                this.emit('provider:remove', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'provider:update': {
+                this.emit('provider:update', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'provider:list': {
+                this.emit('provider:list', ws, msg.id);
                 break;
             }
 

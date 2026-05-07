@@ -231,20 +231,10 @@ export function loadConfig(runtimeOverrides: Partial<Config> = {}): Config {
         baseUrl: 'https://opencode.ai/zen/v1',
         apiKey: '',  // 免费模型无需 API Key
         models: {
-            // ── 免费模型（价格: Free，无需 API Key） ──
+            'minimax-m2.5-free': { name: 'MiniMax M2.5 (Free)' },
             'big-pickle': { name: 'Big Pickle (Free)' },
-            'minimax-m2.5-free': { name: 'MiniMax M2.5 Free' },
-            'hy3-preview-free': { name: 'Hy3 Preview Free' },
-            'nemotron-3-super-free': { name: 'Nemotron 3 Super Free' },
-            // ── 低价模型（需 OpenCode API Key） ──
-            'ling-2.6-flash': { name: 'Ling 2.6 Flash' },
-            'minimax-m2.5': { name: 'MiniMax M2.5' },
-            'qwen3.5-plus': { name: 'Qwen3.5 Plus' },
-            'gpt-5-nano': { name: 'GPT 5 Nano (廉价)' },
-            'gpt-5.4-nano': { name: 'GPT 5.4 Nano (廉价)' },
-            'gpt-5.1-codex-mini': { name: 'GPT 5.1 Codex Mini' },
-            'gpt-5.4-mini': { name: 'GPT 5.4 Mini' },
-            'kimi-k2.5': { name: 'Kimi K2.5' },
+            'hy3-preview-free': { name: 'Hy3 Preview (Free)' },
+            'nemotron-3-super-free': { name: 'Nemotron 3 Super (Free)' },
         },
     };
 

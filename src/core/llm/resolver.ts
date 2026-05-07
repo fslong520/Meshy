@@ -9,6 +9,7 @@ import { ILLMProvider } from './provider.js';
 import { VercelAIAdapter } from './vercel-ai.js';
 import { LocalEmbeddingAdapter } from './local-embedding.js';
 import { LocalERNIEAdapter } from './local-ernie.js';
+import { OpenCodeDirectAdapter } from './opencode-direct.js';
 import { Config, ProviderConfig } from '../../config/index.js';
 
 export interface ProviderInfo {
@@ -225,6 +226,14 @@ export class ProviderResolver {
     // 缓存拉取到的可用模型列表
     private cachedModels: Record<string, { protocol: string, models: string[] }> | null = null;
 
+    /**
+     * 清除模型缓存，使下次调用 listModelsAsync 时重新拉取。
+     * 在动态添加/删除 provider 后调用。
+     */
+    public clearModelCache(): void {
+        this.cachedModels = null;
+    }
+
     public async listModelsAsync(): Promise<Record<string, { protocol: string, models: string[] }>> {
         if (this.cachedModels) {
             return this.cachedModels;
@@ -357,6 +366,10 @@ export class ProviderResolver {
         // 本地 ERNIE 模型走特殊路径
         if (sdkOrProtocol === '_local_ernie_') {
             instance = new LocalERNIEAdapter();
+        } else if (providerName === 'opencode') {
+            // OpenCode Zen 使用直连适配器，绕过 Vercel AI SDK 的 reasoning 处理问题
+            console.log(`[ProviderResolver] Using OpenCodeDirectAdapter for ${providerName}/${modelId}`);
+            instance = new OpenCodeDirectAdapter(modelId, cfg.apiKey);
         } else {
             instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey || '', modelId, cfg.baseUrl);
         }

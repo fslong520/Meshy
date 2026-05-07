@@ -178,6 +178,9 @@ export class TaskEngine {
     // Phase 16: Ritual Files
     private ritualLoader: RitualLoader;
 
+    // 模型微调参数（由 task:submit 传入）
+    private modelParams: { temperature?: number; maxTokens?: number; topP?: number } = {};
+
     constructor(providerResolver: ProviderResolver, workspace: Workspace, session: Session, options: EngineOptions = {}) {
         this.providerResolver = providerResolver;
         this.workspace = workspace;
@@ -690,7 +693,18 @@ export class TaskEngine {
         }
     }
 
-    private async _runTaskInternal(userPrompt: string, context?: { mode?: string, attachments?: { name: string, type: string, data: string }[] }): Promise<void> {
+    private async _runTaskInternal(userPrompt: string, context?: {
+        mode?: string;
+        attachments?: { name: string; type: string; data: string }[];
+        temperature?: number;
+        maxTokens?: number;
+        topP?: number;
+    }): Promise<void> {
+        // 保存模型微调参数
+        if (context?.temperature !== undefined) this.modelParams.temperature = context.temperature;
+        if (context?.maxTokens !== undefined) this.modelParams.maxTokens = context.maxTokens;
+        if (context?.topP !== undefined) this.modelParams.topP = context.topP;
+
         // Phase 4: 初始化记忆库
         await this.workspace.memoryStore.initialize();
 
@@ -795,13 +809,67 @@ export class TaskEngine {
         const decision = await this.router.classify(parsed.cleanText);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
-        // ── Phase 4: 被动召回历史经验 (Advanced Feature, only on complex intents or explicit @memory) ──
+        // ── Phase 4: 🧠 忆时增强 — 类人记忆检索与涌现 ──
         let memoryHint = '';
+        let emergenceHint = '';
+        const isFirstTurn = this.session.history.length === 0;
+
+        // 检查到期时间胶囊（首次对话时）
+        if (isFirstTurn) {
+            try {
+                const expiredCapsules = await this.workspace.memoryStore.checkExpiredCapsules();
+                if (expiredCapsules.length > 0) {
+                    const capsuleList = expiredCapsules.map(c =>
+                        `- 🎋 记忆胶囊解封：「${c.summary.slice(0, 60)}${c.summary.length > 60 ? '…' : ''}」`
+                    ).join('\n');
+                    emergenceHint = `\n[Time Capsules Unlocked]\n以下封存记忆已到期解封，可供参考：\n${capsuleList}\n`;
+                }
+            } catch { /* time capsule check is non-critical */ }
+        }
+
         const isComplexTask = decision.intent === 'task_planning' || decision.intent === 'debug';
         const isExplicitMemoryMention = parsed.mentions.some(m => m.raw.toLowerCase().includes('memory'));
 
         if (isComplexTask || isExplicitMemoryMention) {
-            memoryHint = await this.workspace.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
+            // 使用忆时类人检索（带超时保护，防止 embedding 网络调用挂死）
+            try {
+                const recallPromise = this.workspace.humanLikeRetriever.recall({
+                    query: parsed.cleanText,
+                    limit: 5,
+                    expand: isExplicitMemoryMention,
+                    progressiveTier: 1,
+                });
+                // 5 秒超时，防止 embedding 请求挂死
+                const timeoutPromise = new Promise<'timeout'>((_, reject) =>
+                    setTimeout(() => reject(new Error('Recall timed out after 5s')), 5000)
+                );
+                const results = await Promise.race([recallPromise, timeoutPromise]) as Awaited<typeof recallPromise>;
+                if (results.length > 0) {
+                    memoryHint = this.workspace.humanLikeRetriever.formatResults(results);
+                }
+            } catch (err) {
+                console.warn('[Engine] HumanLikeRetriever failed, falling back to basic recall.', err);
+                try {
+                    memoryHint = await this.workspace.reflectionEngine.recallRelevantCapsules(parsed.cleanText);
+                } catch (fallbackErr) {
+                    console.warn('[Engine] Fallback recall also failed.', fallbackErr);
+                }
+            }
+        }
+
+        // 记忆涌现检测（带超时保护）
+        if (!isFirstTurn) {
+            try {
+                const emergencePromise = this.workspace.emergenceDetector.processMessage(parsed.cleanText);
+                const timeoutPromise = new Promise<'timeout'>((_, reject) =>
+                    setTimeout(() => reject(new Error('Emergence detection timed out')), 3000)
+                );
+                const emergences = await Promise.race([emergencePromise, timeoutPromise]) as Awaited<typeof emergencePromise>;
+                if (emergences.length > 0) {
+                    const emergenceText = emergences.map(e => e.utterance).join('\n');
+                    emergenceHint = (emergenceHint ? emergenceHint + '\n' : '') + emergenceText;
+                }
+            } catch { /* emergence detection is non-critical */ }
         }
 
         // ── Phase 2: 使用 SystemPromptBuilder 组装 Prompt ──
@@ -819,10 +887,9 @@ export class TaskEngine {
             .withEnvironmentContext(process.platform, this.workspace.rootPath);
 
         if (memoryHint) builder.withMemoryHint(memoryHint);
+        if (emergenceHint) builder.withEmergenceContext(emergenceHint);
 
         // Phase 20: Inject cross-session progress context and Health Check
-        const isFirstTurn = this.session.history.length === 0;
-
         const progressContext = this.progressTracker.getRecentProgress();
         if (progressContext && this.session.history.length <= 1) {
             builder.withConstraint(`\n## Previous Session Progress\nThe following is a summary of work done in previous sessions on this project:\n${progressContext}`);
@@ -1108,6 +1175,9 @@ export class TaskEngine {
                         systemPrompt: injection.systemPrompt,
                         messages: this.session.history,
                         tools: allTools,
+                        temperature: this.modelParams.temperature,
+                        maxTokens: this.modelParams.maxTokens,
+                        topP: this.modelParams.topP,
                     };
 
                     interface PendingToolCall {
@@ -1140,10 +1210,9 @@ export class TaskEngine {
                                 stream: normalizedEvent,
                             });
                         } else if (event.type === 'reasoning_chunk') {
-                            this.daemon?.broadcast('agent:text', {
-                                reasoning: event.data,
+                            this.daemon?.broadcast('agent:reasoning', {
+                                text: event.data,
                                 id: responseMsgId,
-                                stream: normalizedEvent,
                             });
                         } else if (event.type === 'tool_call_start') {
                             const newCall = { id: event.data.id, name: event.data.name, rawArgs: '' };

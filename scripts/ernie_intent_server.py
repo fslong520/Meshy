@@ -296,6 +296,56 @@ class ErnieIntentClassifier:
             "categories": list(INTENT_CATEGORIES.keys()),
         }
 
+    def stream_chat(self, text: str, max_new_tokens: int = 512):
+        """
+        流式生成：逐 token 产出，每行一个 JSON 包含当前片段。
+        供 generateResponseStream 消费，实现真流式。
+        """
+        if not self.is_loaded:
+            yield {"type": "token", "text": "[模型未加载]", "done": True}
+            return
+
+        try:
+            from transformers import TextIteratorStreamer
+            import threading as _threading
+
+            messages = [{"role": "user", "content": text}]
+            formatted = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            import torch
+            model_inputs = self.tokenizer(
+                [formatted], add_special_tokens=False, return_tensors="pt"
+            ).to(self.model.device)
+
+            streamer = TextIteratorStreamer(
+                self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0
+            )
+
+            generation_kwargs = dict(
+                **model_inputs,
+                streamer=streamer,
+                max_new_tokens=max_new_tokens,
+                temperature=0.7,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+
+            thread = _threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+            thread.start()
+
+            for new_text in streamer:
+                # 过滤掉 tokenizer 特殊标记（<s> </s> 等），它们不属于正文
+                cleaned = new_text.replace('</s>', '').replace('<s>', '').replace('<|endoftext|>', '').replace('<|im_end|>', '').replace('<|im_start|>', '')
+                if cleaned:
+                    yield {"type": "token", "text": cleaned, "done": False}
+
+            yield {"type": "token", "text": "", "done": True}
+
+        except Exception as e:
+            yield {"type": "token", "text": f"[流式生成出错: {e}]", "done": True}
+
     def unload(self):
         """释放模型资源"""
         if self.model is not None:
@@ -375,6 +425,20 @@ def main():
                     "type": "chat",
                     **result,
                 }
+
+        elif mode == "stream_chat":
+            text = request.get("text", "")
+            max_tokens = request.get("max_tokens", 512)
+            if not text:
+                print(json.dumps({"id": req_id, "type": "token", "text": "[空输入]", "done": True}))
+                sys.stdout.flush()
+                continue
+            classifier.load()
+            for token in classifier.stream_chat(text, max_tokens):
+                token["id"] = req_id
+                print(json.dumps(token, ensure_ascii=False))
+                sys.stdout.flush()
+            continue  # 已经逐 token flush 了，跳过末尾的 print
 
         elif mode == "health":
             response = {

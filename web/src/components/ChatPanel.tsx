@@ -11,9 +11,11 @@ interface Props {
     onApproval: (id: string, approved: boolean) => void;
     activeSession: { id: string; title?: string } | null;
     onSessionAction: (action: 'rename' | 'compact' | 'delete', payload?: any) => void;
+    showReasoning?: boolean;
+    agentStreaming?: boolean;
 }
 
-export function ChatPanel({ messages, onApproval, activeSession, onSessionAction }: Props) {
+export function ChatPanel({ messages, onApproval, activeSession, onSessionAction, showReasoning = true, agentStreaming = false }: Props) {
     const scrollRef = useRef<HTMLDivElement>(null)
     const [searchTerm, setSearchTerm] = useState('')
     const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
@@ -291,14 +293,25 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
 
                     return (
                         <div id={`msg-${msg.id || i}`} key={msg.id || i} className={`chat-msg ${msg.role}`}>
-                            {/* 思考过程 (DeepSeek-Reasoner) */}
-                            {msg.reasoningContent && (
+                            {/* 思考过程 — 仅当 reasoningContent 与 content 不同（如 DeepSeek R1 的思维链）时显示 */}
+                            {msg.reasoningContent && msg.reasoningContent !== msg.content && showReasoning && (
                                 <details className="reasoning-block">
-                                    <summary>🤔 Thinking Process</summary>
+                                    <summary>🧠 Thinking Process</summary>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
                                         {msg.reasoningContent}
                                     </ReactMarkdown>
                                 </details>
+                            )}
+                            {msg.reasoningContent && msg.reasoningContent !== msg.content && !showReasoning && (
+                                <div className="reasoning-hidden-badge">
+                                    <span className="reasoning-dot" /> AI reasoned about this response
+                                </div>
+                            )}
+                            {/* reasning-as-response 模型（如 big-pickle）：标记本次回复由推理生成 */}
+                            {msg.reasoningContent && msg.reasoningContent === msg.content && (
+                                <div className="reasoning-inline-badge">
+                                    🧠 Generated via reasoning
+                                </div>
                             )}
 
                             {/* 文本内容 */}
@@ -437,6 +450,18 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                         </div>
                     )
                 })}
+
+                {/* ═══ 思考中指示器 ═══ */}
+                {agentStreaming && messages.length > 0 && messages[messages.length - 1]?.role === 'user' && (
+                    <div className="thinking-indicator">
+                        <div className="thinking-dots">
+                            <span className="dot" />
+                            <span className="dot" />
+                            <span className="dot" />
+                        </div>
+                        <span className="thinking-label">思考中…</span>
+                    </div>
+                )}
             </div>
         </div>
     )

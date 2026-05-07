@@ -8,6 +8,7 @@
     "build": "tsup src/index.ts --format esm,cjs --dts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "dev:all": "bash dev.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
