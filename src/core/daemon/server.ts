@@ -548,6 +548,31 @@ export class DaemonServer extends EventEmitter {
                 break;
             }
 
+            case 'tool:manifest:list': {
+                this.emit('tool:manifest:list', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'tool:manifest:get': {
+                this.emit('tool:manifest:get', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'tool:policy:get': {
+                this.emit('tool:policy:get', ws, msg.id);
+                break;
+            }
+
+            case 'tool:policy:set': {
+                this.emit('tool:policy:set', msg.params, ws, msg.id);
+                break;
+            }
+
+            case 'tool:policy:history': {
+                this.emit('tool:policy:history', ws, msg.id);
+                break;
+            }
+
             default:
                 this.sendTo(ws, {
                     id: msg.id,

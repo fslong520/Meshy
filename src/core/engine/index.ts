@@ -30,6 +30,7 @@ import { WorkflowEngine, loadWorkflows } from '../workflow/engine.js';
 import { Logger, initLogger, getLogger } from '../logger/index.js';
 import { createTodoWriteTool, createTodoReadTool } from '../tool/todo.js';
 import { CompactionAgent } from '../session/compaction.js';
+import { LocalERNIEAdapter } from '../llm/local-ernie.js';
 import { CustomCommandRegistry } from '../commands/loader.js';
 import { RitualLoader } from '../ritual/loader.js';
 import { exportReplay, saveReplay, formatReplayText } from '../session/replay.js';
@@ -122,6 +123,9 @@ export class TaskEngine {
     private router: IntentRouter;
     private skillRegistry: SkillRegistry;
 
+    // openKylin ERNIE-4.5-0.3B 本地小模型分类引擎
+    private localERNIE: LocalERNIEAdapter | null = null;
+
     /** 暴露 SkillRegistry 供外部 RPC 调用。 */
     public getSkillRegistry(): SkillRegistry {
         return this.skillRegistry;
@@ -183,8 +187,23 @@ export class TaskEngine {
         const config = loadConfig();
         this.maxRetries = options.maxRetries || config.system.maxRetries || 3;
 
+        // ── openKylin ERNIE-4.5-0.3B 本地小模型意图分类引擎 ──
+        // 当配置启用且 Python 环境可用时，自动初始化本地小模型。
+        // 小模型专用于意图分类，不参与大模型的生成任务。
+        if (config.models.local?.enabled !== false) {
+            try {
+                this.localERNIE = new LocalERNIEAdapter();
+                console.log('[Engine] LocalERNIEAdapter initialized for intent classification.');
+            } catch (err: any) {
+                console.warn(`[Engine] Failed to initialize LocalERNIEAdapter: ${err.message}. Will use keyword + remote LLM fallback.`);
+                this.localERNIE = null;
+            }
+        } else {
+            console.log('[Engine] LocalERNIEAdapter disabled by config.');
+        }
+
         // Phase 2 init
-        this.router = new IntentRouter(this.providerResolver);
+        this.router = new IntentRouter(this.providerResolver, this.localERNIE ?? undefined);
         this.skillRegistry = new SkillRegistry();
         this.skillRegistry.scan(workspace.rootPath);
         this.subagentRegistry = new SubagentRegistry();
@@ -1152,6 +1171,10 @@ export class TaskEngine {
                             isDone = true;
                         } else if (event.type === 'error') {
                             console.error('\n[StreamError]:', event.data);
+                            this.daemon?.broadcast('agent:text', {
+                                text: `\n⚠️ ${event.data}`,
+                                id: responseMsgId,
+                            });
                         }
                     });
 
@@ -1228,23 +1251,45 @@ export class TaskEngine {
                     console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
 
                     // Phase 14: Graceful Degradation (Fallback) Mechanism
-                    // If we detect an API dropout, timeout, rate limit, or server error, we attempt a fallback.
-                    const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach/i.test(message);
+                    // If we detect an API dropout, timeout, rate limit, token exhaustion, or server error, we attempt a fallback.
+                    const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach|parse url|invalid url|fetch failed|network|econnrefused|enotfound|socket/i.test(message);
+                    const isTokenExhaustion = ProviderResolver.isTokenExhaustionError(message);
 
                     let fallbackTriggered = false;
-                    if (isApiFailure) {
-                        const fallbackProvider = this.providerResolver.getFallbackProvider();
-                        if (fallbackProvider && activeLLM !== fallbackProvider) {
-                            console.log(`\n[Graceful Degradation] Primary LLM failed (${message}). Automatically falling back to backup provider...`);
-                            this.logger.engine(`Switching to Fallback Provider due to API error: ${message}`);
+                    if (isApiFailure || isTokenExhaustion) {
+                        // 第一优先：用户配置的 fallback 模型
+                        let fallbackProvider: ILLMProvider | null = null;
 
-                            this.addMessageAndAppend({
-                                role: 'user',
-                                content: `System Warning: Primary LLM API crashed (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
-                            });
+                        if (isTokenExhaustion) {
+                            // token 耗尽时，优先尝试免费模型
+                            fallbackProvider = this.providerResolver.getFreeProvider();
+                            if (fallbackProvider) {
+                                console.log(`\n[Token Exhaustion] API tokens exhausted (${message}). Falling back to FREE model provider...`);
+                                this.logger.engine(`Token exhaustion detected. Switching to FREE provider.`);
+                                this.addMessageAndAppend({
+                                    role: 'user',
+                                    content: `⚠️ System: Primary LLM tokens exhausted (${message}). Automatically switched to FREE emergency model. Functionality may be limited.`,
+                                });
+                                activeLLM = fallbackProvider;
+                                fallbackTriggered = true;
+                            }
+                        }
 
-                            activeLLM = fallbackProvider;
-                            fallbackTriggered = true;
+                        if (!fallbackTriggered) {
+                            fallbackProvider = this.providerResolver.getFallbackProvider();
+                            // 用 provider 名称做比较，而非对象引用（避免缓存实例导致的恒等判断失败）
+                            const isSameProvider = activeLLM === fallbackProvider;
+                            if (fallbackProvider && !isSameProvider) {
+                                const reason = isTokenExhaustion ? 'token exhaustion' : 'API failure';
+                                console.log(`\n[Graceful Degradation] Primary LLM ${reason} (${message}). Falling back to backup provider...`);
+                                this.logger.engine(`Switching to Fallback Provider due to ${reason}: ${message}`);
+                                this.addMessageAndAppend({
+                                    role: 'user',
+                                    content: `System Warning: Primary LLM ${reason} (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
+                                });
+                                activeLLM = fallbackProvider;
+                                fallbackTriggered = true;
+                            }
                         }
                     }
 
@@ -1253,6 +1298,28 @@ export class TaskEngine {
                             role: 'user',
                             content: `System Error: ${message}. Please self-correct or ask the user for help.`,
                         });
+                        this.daemon?.broadcast('agent:text', {
+                            text: `\n⚠️ 系统提示: ${message}\n`,
+                            id: `sys-${Date.now()}`,
+                        });
+
+                        // 最终兜底：所有远程模型都失败时，切换到本地 ERNIE-0.3B
+                        if (this.localERNIE) {
+                            console.log(`\n[Local Fallback] All remote LLMs failed. Switching to local ERNIE-0.3B model...`);
+                            this.logger.engine(`All remote LLMs failed. Switching to local ERNIE-0.3B.`);
+                            this.addMessageAndAppend({
+                                role: 'user',
+                                content: `⚠️ System: All remote LLMs failed (${message}). Switching to LOCAL ERNIE-0.3B model. Responses will be less capable but the conversation continues.`,
+                            });
+                            this.daemon?.broadcast('agent:text', {
+                                text: `\n⚠️ [本地模式] 远程模型不可用，切换到本地 ERNIE-0.3B 模型继续...\n`,
+                                id: `sys-${Date.now()}`,
+                            });
+                            activeLLM = this.localERNIE;
+                            // 重置重试计数，让本地模型有机会执行
+                            retries = 0;
+                            fallbackTriggered = true;
+                        }
                     }
 
                     // Phase 19: Aggressive context compression on sequential errors
@@ -1275,7 +1342,13 @@ export class TaskEngine {
             }
 
             if (retries >= this.maxRetries) {
-                console.warn('\n[Engine] Max retries reached. Task suspended.');
+                const errorMsg = 'All LLM providers failed after max retries. Please check your API keys and network connection, then try again.';
+                console.warn(`\n[Engine] ${errorMsg}`);
+                this.daemon?.broadcast('agent:error', {
+                    id: `error-${Date.now()}`,
+                    message: errorMsg,
+                    fatal: true,
+                });
             }
         } finally {
             this.session.clearActivatedTools();
@@ -1289,6 +1362,22 @@ export class TaskEngine {
      */
     public async submitFeedback(feedback: FeedbackType): Promise<void> {
         await this.workspace.reflectionEngine.onUserFeedback(this.session, feedback);
+    }
+
+    /**
+     * 释放本地模型资源（Python 子进程）。
+     * 在应用退出时应调用此方法以确保资源正确回收。
+     */
+    public shutdown(): void {
+        if (this.localERNIE) {
+            console.log('[Engine] Shutting down LocalERNIEAdapter...');
+            try {
+                this.localERNIE.shutdown();
+            } catch (err: any) {
+                console.warn(`[Engine] LocalERNIEAdapter shutdown error: ${err.message}`);
+            }
+            this.localERNIE = null;
+        }
     }
 
     // ─── ACI 工具注册到 ToolRegistry ───

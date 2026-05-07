@@ -15,9 +15,10 @@ interface Props {
     connected: boolean;
     activeSessionId: string | null;
     onSessionSwitch?: (sessionId: string, title?: string) => void;
+    onSettingsOpen?: () => void;
 }
 
-export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Props) {
+export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSettingsOpen }: Props) {
     const [sessions, setSessions] = useState<SessionInfo[]>([])
     // Removed local activeSession state
     const [workspaces, setWorkspaces] = useState<string[]>([])
@@ -192,7 +193,7 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch }: Pro
 
             {/* Footer */}
             <div className="sidebar-footer">
-                <button>
+                <button onClick={() => onSettingsOpen?.()}>
                     <Settings size={14} /> Settings
                 </button>
             </div>

@@ -58,6 +58,7 @@ export class ProviderResolver {
 
     /**
      * 获取 Fallback 模型 (Graceful Degradation)
+     * 已增强：当用户 API token 耗尽时，自动切换到免费模型。
      */
     public getFallbackProvider(): ILLMProvider | null {
         if (this.config.models.fallback) {
@@ -68,6 +69,95 @@ export class ProviderResolver {
             }
         }
         return null;
+    }
+
+    /**
+     * 获取免费模型（token 用尽时的最终兜底）。
+     *
+     * 优先级：
+     *   1. 用户 config.free.provider 指定的免费 provider（默认 opencode）
+     *   2. opencode 免费模型（如果已通过 OPENCODE_API_KEY 配置）
+     *   3. 其他已配置的 provider 中任意一个
+     *
+     * 返回 null 表示无可用免费模型。
+     */
+    public getFreeProvider(): ILLMProvider | null {
+        const freeConfig = this.config.models.free;
+        if (!freeConfig || freeConfig.enabled === false) return null;
+
+        // 1. 用户显式指定的免费 provider
+        const freeProviderName = freeConfig.provider || 'opencode';
+        const freeModels = this._getModelsForProvider(freeProviderName);
+        // 优先选择最可靠的免费模型
+        const freeModelPriority = ['minimax-m2.5-free', 'hy3-preview-free', 'nemotron-3-super-free', 'big-pickle'];
+        const bestModel = freeModelPriority.find(m => freeModels.includes(m)) || freeModels[0];
+
+        if (bestModel) {
+            try {
+                return this.resolveFromTarget(`${freeProviderName}/${bestModel}`);
+            } catch {
+                // fall through
+            }
+        }
+
+        // 2. 遍历所有已配置的 provider 找一个可用的
+        for (const [name, cfg] of Object.entries(this.config.providers)) {
+            if (!cfg.apiKey || cfg.apiKey.startsWith('sk-placeholder') || cfg.apiKey.startsWith('placeholder')) {
+                continue; // 跳过占位符 key
+            }
+            const models = this._getModelsForProvider(name);
+            if (models.length > 0) {
+                try {
+                    return this.resolveFromTarget(`${name}/${models[0]}`);
+                } catch {
+                    continue;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 判断错误消息是否为 token 耗尽 / 限额不足
+     */
+    public static isTokenExhaustionError(message: string): boolean {
+        const exhaustionPatterns = [
+            'insufficient_quota', 'insufficient funding', 'exceeded',
+            'billing', '429', '402', '403', 'payment required',
+            'quota', 'rate limit', 'token limit', 'max budget',
+            'credits exhausted', 'no credits', 'billing threshold',
+            'account disabled', 'access denied', 'forbidden',
+            'you do not have access', 'not enough credits',
+            'payment', 'suspended',
+        ];
+        const lower = message.toLowerCase();
+        return exhaustionPatterns.some(p => lower.includes(p));
+    }
+
+    /**
+     * 获取指定 provider 的可用模型列表
+     */
+    private _getModelsForProvider(providerName: string): string[] {
+        const cfg = this.config.providers[providerName];
+        if (!cfg) return [];
+
+        const models: string[] = [];
+        // 检查 config.providers[providerName].models 中的 key
+        if (cfg.models) {
+            models.push(...Object.keys(cfg.models));
+        }
+        // 通过 config.models.default/fallback/small 推断
+        for (const key of ['default', 'fallback', 'small'] as const) {
+            const modelStr = this.config.models[key];
+            if (modelStr && modelStr.startsWith(`${providerName}/`)) {
+                const modelId = modelStr.substring(providerName.length + 1);
+                if (!models.includes(modelId)) {
+                    models.push(modelId);
+                }
+            }
+        }
+        return models;
     }
 
     /**
@@ -127,7 +217,7 @@ export class ProviderResolver {
             protocol: cfg.protocol,
             sdk: cfg.sdk,
             baseUrl: cfg.baseUrl,
-            hasApiKey: !!cfg.apiKey,
+            hasApiKey: !!cfg.apiKey && !cfg.apiKey.startsWith('placeholder'),
         }));
     }
 
@@ -263,7 +353,7 @@ export class ProviderResolver {
             throw new Error(`Provider "${providerName}" has neither "sdk" nor "protocol" configured.`);
         }
 
-        instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey, modelId, cfg.baseUrl);
+        instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey || '', modelId, cfg.baseUrl);
 
         this.instances.set(cacheKey, instance);
         return instance;

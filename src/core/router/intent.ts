@@ -5,13 +5,18 @@
  * 并据此决定使用哪个模型规格、需要挂载哪些工具、以及组装什么样的 System Prompt。
  *
  * 设计要点：
- * - 支持基于关键词的快速本地判定（零成本，不调用 LLM）
- * - 支持可选的小模型深度意图分析（用于模糊场景）
+ * - 三层分类架构：
+ *   第一层：零成本的纯关键词快速分类
+ *   第二层：ERNIE-4.5-0.3B 本地小模型深度分类（低功耗、低延迟）
+ *   第三层：当本地模型也无法确定时，回退到远程大模型 LLM 分类
  * - 输出标准化的 RoutingDecision，供 TaskEngine 消费
+ *
+ * 本设计遵循 openKylin 终极任务的"小模型分类、大模型执行"的分层思想。
  */
 
 import { ILLMProvider } from '../llm/provider.js';
 import { ProviderResolver } from '../llm/resolver.js';
+import { LocalERNIEAdapter } from '../llm/local-ernie.js';
 
 // ─── 意图类型枚举 ───
 export type IntentCategory =
@@ -36,6 +41,8 @@ export interface RoutingDecision {
     suggestedSkills: string[];       // 建议挂载的 Skill 名称
     suggestedToolPacks?: string[];   // 建议挂载的 ToolPack 名称
     confidence: number;              // 0~1
+    /** 标记本分类使用的技术路径 */
+    classificationMethod?: 'keyword' | 'ernie_0.3b' | 'remote_llm';
 }
 
 // ─── 关键词规则表 ───
@@ -49,7 +56,7 @@ interface KeywordRule {
 
 const KEYWORD_RULES: KeywordRule[] = [
     {
-        keywords: ['重构', 'refactor', '修改', 'edit', '改一下', '替换', 'replace', '修复', 'fix'],
+        keywords: ['重构', 'refactor', '修改', 'edit', '改一下', '替换', 'replace', '修复', 'fix', '优化'],
         intent: 'code_edit',
         modelTier: 'default',
         systemPromptHint: 'Focus on precise code editing. Always read the file first before making changes.',
@@ -77,7 +84,7 @@ const KEYWORD_RULES: KeywordRule[] = [
         suggestedSkills: [],
     },
     {
-        keywords: ['解释', 'explain', '什么意思', '为何', '原理', '怎么工作'],
+        keywords: ['解释', 'explain', '什么意思', '为何', '原理', '怎么工作', '是什么'],
         intent: 'explain',
         modelTier: 'small',
         systemPromptHint: 'Explain the concept or code clearly and concisely.',
@@ -91,7 +98,7 @@ const KEYWORD_RULES: KeywordRule[] = [
         suggestedSkills: [],
     },
     {
-        keywords: ['爬虫', 'crawl', '新闻', 'news', '查询', 'query', '搜一下', 'web search', '网上'],
+        keywords: ['爬虫', 'crawl', '新闻', 'news', '查询', 'query', '搜一下', '网上', '搜索一下'],
         intent: 'info_retrieval',
         modelTier: 'default',
         systemPromptHint: 'Retrieve and synthesize information from external sources.',
@@ -124,6 +131,7 @@ function classifyByKeywords(userInput: string): RoutingDecision {
             systemPromptHint: bestMatch.systemPromptHint,
             suggestedSkills: bestMatch.suggestedSkills,
             confidence: Math.min(bestScore * 0.3, 1),
+            classificationMethod: 'keyword',
         };
     }
 
@@ -134,27 +142,38 @@ function classifyByKeywords(userInput: string): RoutingDecision {
         systemPromptHint: 'Respond helpfully and concisely.',
         suggestedSkills: [],
         confidence: 0.1,
+        classificationMethod: 'keyword',
     };
 }
 
 /**
  * IntentRouter — 系统前置意图路由器
  *
- * 双轨判定：纯关键词匹配（零成本） + 可选的小模型结构化 Tool Calling 深度分析。
+ * 三层判定系统：
+ *   ① 纯关键词匹配（零成本，速度最快）
+ *   ② ERNIE-4.5-0.3B 本地小模型分类（低功耗，保护隐私）
+ *   ③ 远程大模型 LLM 分类（最终保底方案）
  */
 export class IntentRouter {
     private providerResolver?: ProviderResolver;
+    private localERNIE?: LocalERNIEAdapter;
 
-    constructor(providerResolver?: ProviderResolver) {
+    constructor(providerResolver?: ProviderResolver, localERNIE?: LocalERNIEAdapter) {
         this.providerResolver = providerResolver;
+        this.localERNIE = localERNIE;
     }
 
     /**
      * 对用户输入进行意图分类，返回路由决策。
-     * 优先走零成本的本地关键词匹配，
-     * 仅当置信度不足且小模型可用时，才走 LLM 分类。
+     *
+     * 流程：
+     *   keyword → 置信度足够？→ 是 → 返回
+     *            → 否 → ERNIE-0.3B 可用？→ 是 → ERNIE 分类
+     *                                        → 否 → 远程 LLM 分类（如果有）
+     *                                              → 否 → 返回 keyword 结果
      */
     public async classify(userInput: string): Promise<RoutingDecision> {
+        // 第一层：纯关键词匹配（零成本）
         const localResult = classifyByKeywords(userInput);
 
         // 如果本地判定置信度足够，直接返回
@@ -162,17 +181,57 @@ export class IntentRouter {
             return localResult;
         }
 
-        // 如果有 ProviderResolver 且置信度低，走 LLM 辅助判定
+        // 第二层：使用 ERNIE-4.5-0.3B 本地小模型进行深度分析
+        if (this.localERNIE) {
+            try {
+                const ernieResult = await this.localERNIE.classifyIntent(
+                    userInput,
+                    { intent: localResult.intent, confidence: localResult.confidence }
+                );
+
+                // 如果小模型给出的置信度足够，采纳之
+                if (ernieResult.confidence >= 0.35) {
+                    const matchedRule = KEYWORD_RULES.find(r => r.intent === ernieResult.intent);
+                    console.log(
+                        `[IntentRouter] ERNIE-0.3B classified intent="${ernieResult.intent}" ` +
+                        `confidence=${ernieResult.confidence.toFixed(2)} ` +
+                        `reasoning="${ernieResult.reasoning || ''}"`
+                    );
+
+                    return {
+                        intent: ernieResult.intent as IntentCategory,
+                        modelTier: matchedRule?.modelTier ?? 'small',
+                        systemPromptHint: matchedRule?.systemPromptHint ?? '',
+                        suggestedSkills: matchedRule?.suggestedSkills ?? [],
+                        confidence: ernieResult.confidence,
+                        classificationMethod: 'ernie_0.3b',
+                    };
+                }
+
+                // 小模型给出了分类但置信度偏低，仍记录日志供调试
+                console.log(
+                    `[IntentRouter] ERNIE-0.3B returned low confidence ` +
+                    `(${ernieResult.confidence.toFixed(2)}), keeping keyword result.`
+                );
+            } catch (err: any) {
+                console.warn(`[IntentRouter] ERNIE-0.3B classification failed: ${err.message}. Falling through.`);
+            }
+        }
+
+        // 第三层：如果有远程 LLM 且本地模型不可用或不确定，走 LLM 辅助判定
         if (this.providerResolver) {
             return this.classifyByLLM(userInput, localResult);
         }
 
-        return localResult;
+        return {
+            ...localResult,
+            classificationMethod: 'keyword',
+        };
     }
 
     /**
-     * 使用小模型进行深度意图分析（可选路径）。
-     * 通过 Tool Calling 让小模型返回结构化的意图分类，避免原始文本解析不稳定。
+     * 使用远程大模型进行深度意图分析（最终保底方案）。
+     * 仅在本地关键词和 ERNIE-0.3B 都无法确定时调用。
      */
     private async classifyByLLM(
         userInput: string,
@@ -226,7 +285,12 @@ export class IntentRouter {
                 }
             );
 
-            if (!toolCallArgs) return fallback;
+            if (!toolCallArgs) {
+                return {
+                    ...fallback,
+                    classificationMethod: 'remote_llm',
+                };
+            }
 
             const parsed = JSON.parse(toolCallArgs);
             const intent = parsed.intent as IntentCategory;
@@ -238,10 +302,14 @@ export class IntentRouter {
                 systemPromptHint: matchedRule?.systemPromptHint ?? '',
                 suggestedSkills: parsed.suggestedSkills ?? matchedRule?.suggestedSkills ?? [],
                 confidence: parsed.confidence ?? 0.5,
+                classificationMethod: 'remote_llm',
             };
         } catch {
             // LLM 分类失败，退回本地结果
-            return fallback;
+            return {
+                ...fallback,
+                classificationMethod: 'keyword',
+            };
         }
     }
 }

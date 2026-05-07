@@ -14,7 +14,7 @@ const providerConfigSchema = z.object({
     protocol: z.string().optional(), // 协议 (openai, anthropic, etc.)
     sdk: z.string().optional(),      // 对应 Vercel AI SDK 的 Provider 包名，如 @ai-sdk/anthropic
     baseUrl: z.string().optional(),
-    apiKey: z.string(),
+    apiKey: z.string().optional(),   // 可为空（如 OpenCode Zen 免费模型无需 key）
     models: z.record(z.string(), modelConfigSchema).optional(), // 该 Provider 下允许的模型列表
 });
 
@@ -32,7 +32,60 @@ export const configSchema = z.object({
         fallback: z.string().default('openai/gpt-4o'),
         small: z.string().default('openai/gpt-4o-mini'),
         embedding: z.string().optional(), // 格式: "providerName/modelId"
-    }).default({ default: 'openai/gpt-4o', fallback: 'openai/gpt-4o', small: 'openai/gpt-4o-mini' }),
+        local: z.object({
+            enabled: z.boolean().default(true),                  // 是否启用本地小模型分类
+            modelName: z.string().default('PaddlePaddle/ERNIE-4.5-0.3B-PT'), // ModelScope 模型名
+            pythonCmd: z.string().default('python3'),            // Python 命令路径
+            scriptPath: z.string().optional(),                   // Python 脚本路径（自动检测）
+        }).default({ enabled: true, modelName: 'PaddlePaddle/ERNIE-4.5-0.3B-PT', pythonCmd: 'python3' }),
+        /** 免费模型应急降级配置（token 用尽或 API 限额耗尽时自动启用） */
+        free: z.object({
+            enabled: z.boolean().default(true),              // 是否启用免费模型应急
+            provider: z.string().default('opencode'),        // 免费 provider 名称（OpenCode Zen）
+            /** 自动降级条件：检测到这些错误时自动切换到免费模型 */
+            fallbackOnErrors: z.array(z.string()).default([
+                'insufficient_quota',
+                'insufficient funding',
+                'exceeded',
+                'billing',
+                '429',
+                '402',
+                '403',
+                'payment',
+                'quota',
+                'rate limit',
+                'token limit',
+                'max budget',
+                'credits exhausted',
+                'no credits',
+                'billing threshold',
+            ]),
+        }).default({ enabled: true, provider: 'opencode', fallbackOnErrors: [
+            'insufficient_quota', 'insufficient funding', 'exceeded',
+            'billing', '429', '402', '403', 'payment', 'quota',
+            'rate limit', 'token limit', 'max budget',
+            'credits exhausted', 'no credits', 'billing threshold',
+        ] }),
+    }).default({
+        default: 'openai/gpt-4o',
+        fallback: 'openai/gpt-4o',
+        small: 'openai/gpt-4o-mini',
+        local: {
+            enabled: true,
+            modelName: 'PaddlePaddle/ERNIE-4.5-0.3B-PT',
+            pythonCmd: 'python3',
+        },
+        free: {
+            enabled: true,
+            provider: 'opencode',
+            fallbackOnErrors: [
+                'insufficient_quota', 'insufficient funding', 'exceeded',
+                'billing', '429', '402', '403', 'payment', 'quota',
+                'rate limit', 'token limit', 'max budget',
+                'credits exhausted', 'no credits', 'billing threshold',
+            ],
+        },
+    }),
     tasks: z.record(
         z.string(),
         z.object({
@@ -169,10 +222,60 @@ export function loadConfig(runtimeOverrides: Partial<Config> = {}): Config {
     if (process.env.ANTHROPIC_API_KEY) {
         envProviders.anthropic = { protocol: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: process.env.ANTHROPIC_BASE_URL };
     }
+    // ── OpenCode Zen 免费模型（无需 API Key，直接可用） ──
+    // 文档: https://opencode.ai/docs/zen/#pricing
+    // 免费模型: Big Pickle, MiniMax M2.5 Free, Hy3 Preview Free, Nemotron 3 Super Free
+    // 用法: 零配置，自动可用
+    envProviders.opencode = {
+        sdk: '@ai-sdk/openai-compatible',
+        baseUrl: 'https://opencode.ai/zen/v1',
+        apiKey: '',  // 免费模型无需 API Key
+        models: {
+            // ── 免费模型（价格: Free，无需 API Key） ──
+            'big-pickle': { name: 'Big Pickle (Free)' },
+            'minimax-m2.5-free': { name: 'MiniMax M2.5 Free' },
+            'hy3-preview-free': { name: 'Hy3 Preview Free' },
+            'nemotron-3-super-free': { name: 'Nemotron 3 Super Free' },
+            // ── 低价模型（需 OpenCode API Key） ──
+            'ling-2.6-flash': { name: 'Ling 2.6 Flash' },
+            'minimax-m2.5': { name: 'MiniMax M2.5' },
+            'qwen3.5-plus': { name: 'Qwen3.5 Plus' },
+            'gpt-5-nano': { name: 'GPT 5 Nano (廉价)' },
+            'gpt-5.4-nano': { name: 'GPT 5.4 Nano (廉价)' },
+            'gpt-5.1-codex-mini': { name: 'GPT 5.1 Codex Mini' },
+            'gpt-5.4-mini': { name: 'GPT 5.4 Mini' },
+            'kimi-k2.5': { name: 'Kimi K2.5' },
+        },
+    };
 
     const envConfig: Record<string, any> = {};
     if (Object.keys(envProviders).length > 0) {
         envConfig.providers = envProviders;
+    }
+
+    // 当免费降级启用时，自动选择免费模型作为 fallback（如果用户没手动改过 fallback）
+    const mergedTmp = deepMerge(
+        configSchema.parse({}),
+        globalConfig,
+        projectConfig,
+        envConfig,
+    );
+    const isFallbackStillDefault = mergedTmp.models?.fallback === 'openai/gpt-4o' ||
+        mergedTmp.models?.fallback === mergedTmp.models?.default;
+    const freeProviderName = mergedTmp.models?.free?.provider || 'opencode';
+    const freeEnabled = mergedTmp.models?.free?.enabled !== false;
+
+    if (freeEnabled && isFallbackStillDefault && envProviders[freeProviderName]) {
+        const freeModels = Object.keys(envProviders[freeProviderName].models || {});
+        // 优先选标了 "(Free)" 的模型
+        // 按可靠性排序：minimax-m2.5-free > hy3-preview-free > nemotron-3-super-free > big-pickle
+        const freeModelPriority = ['minimax-m2.5-free', 'hy3-preview-free', 'nemotron-3-super-free', 'big-pickle'];
+        const freeModel = freeModelPriority.find(m => freeModels.includes(m)) || freeModels[0];
+        if (freeModel) {
+            envConfig.models = envConfig.models || {};
+            envConfig.models.fallback = `${freeProviderName}/${freeModel}`;
+            console.log(`[Config] OpenCode Zen free model detected. Auto-set fallback to: ${envConfig.models.fallback}`);
+        }
     }
 
     // Merge order: Base Defaults -> Global -> Project -> Env -> Runtime

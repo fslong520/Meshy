@@ -13,3 +13,4 @@ public/
 .agent/
 .worktrees/
 vitest.config.ts
+__pycache__/

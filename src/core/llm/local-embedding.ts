@@ -1,9 +1,21 @@
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-// @ts-ignore - The types of @xenova/transformers might need special handling
-import { pipeline, env } from '@xenova/transformers';
 import { ILLMProvider } from './provider.js';
+
+// 动态导入 @xenova/transformers，避免 sharp 原生模块缺失时阻塞启动
+let transformersModule: any = null;
+async function getTransformers() {
+    if (!transformersModule) {
+        try {
+            transformersModule = await import('@xenova/transformers');
+        } catch (err: any) {
+            console.warn(`[LocalEmbeddingAdapter] Warning: @xenova/transformers failed to load (${err.message}). Local embedding will be unavailable.`);
+            transformersModule = null;
+        }
+    }
+    return transformersModule;
+}
 
 export class LocalEmbeddingAdapter implements ILLMProvider {
     private embedderPipeline: any = null;
@@ -13,19 +25,15 @@ export class LocalEmbeddingAdapter implements ILLMProvider {
     // ungated (unlike Nomic models), and naturally produces 768 dimensions by default.
     private modelName = 'Xenova/bge-base-en-v1.5';
 
+    private modelsDir: string;
+
     constructor() {
-        // Enforce the user's constraint: Do NOT pollute the repository or tmp directories 
-        // with huge payload models. Store them globally at the OS level.
         const meshyGlobalDir = path.join(os.homedir(), '.meshy');
-        const modelsDir = path.join(meshyGlobalDir, 'models');
+        this.modelsDir = path.join(meshyGlobalDir, 'models');
 
-        if (!fs.existsSync(modelsDir)) {
-            fs.mkdirSync(modelsDir, { recursive: true });
+        if (!fs.existsSync(this.modelsDir)) {
+            fs.mkdirSync(this.modelsDir, { recursive: true });
         }
-
-        // Configure Xenova/transformers environment cache strategy
-        env.cacheDir = modelsDir;
-        env.localModelPath = modelsDir;
     }
 
     /**
@@ -37,12 +45,17 @@ export class LocalEmbeddingAdapter implements ILLMProvider {
 
         if (!this.initPromise) {
             this.initPromise = (async () => {
+                const tf = await getTransformers();
+                if (!tf) {
+                    throw new Error('@xenova/transformers is not available. Local embedding cannot be initialized.');
+                }
+                tf.env.cacheDir = this.modelsDir;
+                tf.env.localModelPath = this.modelsDir;
+
                 console.log(`[LocalEmbeddingAdapter] Initializing embedding model: ${this.modelName}`);
-                console.log(`[LocalEmbeddingAdapter] Cache directory set to: ${env.cacheDir}`);
-                // feature extraction translates to embeddings logic
-                this.embedderPipeline = await pipeline('feature-extraction', this.modelName, {
-                    // Force the pipeline to download if not present, but use cache if possible
-                    quantized: true, // Use int8 quantized versions for memory efficiency
+                console.log(`[LocalEmbeddingAdapter] Cache directory set to: ${tf.env.cacheDir}`);
+                this.embedderPipeline = await tf.pipeline('feature-extraction', this.modelName, {
+                    quantized: true,
                 });
                 console.log(`[LocalEmbeddingAdapter] Initialization complete.`);
             })();
@@ -51,6 +64,7 @@ export class LocalEmbeddingAdapter implements ILLMProvider {
     }
 
     supportsEmbedding(): boolean {
+        // 乐观返回 true，实际初始化失败会在 initializePipeline 中抛错
         return true;
     }
 

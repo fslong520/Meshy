@@ -1,7 +1,8 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createDeepSeek } from '@ai-sdk/deepseek';
-import { streamText, generateText, ModelMessage, tool, jsonSchema } from 'ai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { streamText, generateText, ModelMessage, tool } from 'ai';
 import {
     AgentMessageEvent,
     ILLMProvider,
@@ -18,6 +19,9 @@ const BUNDLED_PROVIDERS: Record<string, (options: any) => any> = {
     '@ai-sdk/anthropic': createAnthropic,
     'deepseek': createDeepSeek,
     '@ai-sdk/deepseek': createDeepSeek,
+    // 通用 OpenAI 兼容层（适用于 /v1/chat/completions 而非 /v1/responses）
+    '@ai-sdk/openai-compatible': createOpenAICompatible,
+    'openai-compatible': createOpenAICompatible,
 };
 
 export class VercelAIAdapter implements ILLMProvider {
@@ -34,7 +38,7 @@ export class VercelAIAdapter implements ILLMProvider {
         baseURL?: string
     ) {
         this.sdkIdentifier = sdkIdentifier;
-        this.apiKey = apiKey;
+        this.apiKey = apiKey || '';
         this.modelId = modelId;
         this.baseURL = baseURL;
 
@@ -45,11 +49,18 @@ export class VercelAIAdapter implements ILLMProvider {
                 ? baseURL?.replace(/\/v1\/?$/, '')
                 : baseURL;
 
-            const sdk = factory({
-                apiKey,
+            // 对于不需要 API Key 的免费模型，不传递 apiKey
+            const factoryOptions: Record<string, any> = {
                 baseURL: normalizedBaseURL,
-                headers: isCodexProxy ? { 'X-API-Key': apiKey } : { 'x-api-key': apiKey }
-            });
+            };
+            if (this.apiKey && !this.apiKey.startsWith('no-key') && this.apiKey !== 'placeholder') {
+                factoryOptions.apiKey = this.apiKey;
+            }
+            if (isCodexProxy && this.apiKey) {
+                factoryOptions.headers = { 'X-API-Key': this.apiKey, 'x-api-key': this.apiKey };
+            }
+
+            const sdk = factory(factoryOptions);
             this.model = sdk(modelId);
         } else {
             // Fallback: 尝试作为 openai 兼容层处理 (许多中转站支持 openai sdk)
@@ -189,10 +200,20 @@ export class VercelAIAdapter implements ILLMProvider {
         const tools: Record<string, any> = {};
         if (prompt.tools && prompt.tools.length > 0) {
             for (const t of prompt.tools) {
+                // 对于 @ai-sdk/openai-compatible 等非 OpenAI 原生 provider，
+                // jsonSchema() 的包装 { jsonSchema: {...} } 会导致 schema 解析失败（type: null）。
+                // 直接传入原始 JSON Schema 对象，让 provider 自行处理。
+                const rawSchema = t.inputSchema && typeof t.inputSchema === 'object'
+                    ? { ...t.inputSchema }
+                    : { type: 'object', properties: {} };
+                // 确保顶层有 type: 'object'
+                if (!rawSchema.type || rawSchema.type === null) {
+                    rawSchema.type = 'object';
+                }
+
                 tools[t.name] = tool({
                     description: t.description,
-                    // Use jsonSchema to adapt the raw JSON Schema without Zod compiling
-                    parameters: jsonSchema<any>(t.inputSchema)
+                    parameters: rawSchema as any,
                 } as any);
             }
         }
@@ -270,7 +291,8 @@ export class VercelAIAdapter implements ILLMProvider {
                         onEvent({ type: 'reasoning_chunk', data: reasoningDelta });
                     }
                 } else if (c.type === 'error') {
-                    onEvent({ type: 'error', data: String(c.error) });
+                    // 抛出错误让引擎的 fallback 机制接手，不再发送 done 事件
+                    throw new Error(String(c.error));
                 }
             }
 

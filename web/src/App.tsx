@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   useWebSocket,
   useEvent,
@@ -23,6 +23,59 @@ import { ChatPanel } from './components/ChatPanel'
 import { RightPanel } from './components/RightPanel'
 import { InputArea } from './components/InputArea'
 
+// ─── 国际化翻译 ───
+export type Lang = 'zh' | 'en'
+
+const translations: Record<Lang, Record<string, string>> = {
+  zh: {
+    settings: '设置',
+    toolPolicy: '工具策略模式',
+    standardMode: '标准模式：所有工具均可执行。',
+    readOnlyMode: '只读模式：修改类工具被阻止，仅允许安全读取操作。',
+    language: '语言 / Language',
+    theme: '主题',
+    dark: '深色',
+    light: '浅色',
+    auto: '跟随系统',
+    fontSize: '字体大小',
+    compactMessages: '紧凑消息',
+    showReasoning: '显示思考过程',
+    moreSettings: '更多设置即将推出...',
+    standard: '标准',
+    readOnly: '只读',
+  },
+  en: {
+    settings: 'Settings',
+    toolPolicy: 'Tool Policy Mode',
+    standardMode: 'Standard mode: All tools are available for execution.',
+    readOnlyMode: 'Read-only mode: Modifying tools are blocked. Only safe read operations are allowed.',
+    language: 'Language',
+    theme: 'Theme',
+    dark: 'Dark',
+    light: 'Light',
+    auto: 'Auto',
+    fontSize: 'Font Size',
+    compactMessages: 'Compact Messages',
+    showReasoning: 'Show Reasoning',
+    moreSettings: 'More settings coming soon...',
+    standard: 'Standard',
+    readOnly: 'Read-Only',
+  },
+}
+
+// 从 localStorage 加载保存的语言偏好
+function loadLang(): Lang {
+  const saved = localStorage.getItem('meshy-lang')
+  return saved === 'en' ? 'en' : 'zh'
+}
+
+// 从 localStorage 加载保存的主题偏好
+type Theme = 'dark' | 'light' | 'auto'
+function loadTheme(): Theme {
+  const saved = localStorage.getItem('meshy-theme')
+  return saved === 'light' ? 'light' : saved === 'auto' ? 'auto' : 'dark'
+}
+
 function App() {
   const { connected } = useWebSocket()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -33,6 +86,90 @@ function App() {
   const [activeSession, setActiveSession] = useState<{ id: string; title?: string } | null>(null)
   const [policyDecisions, setPolicyDecisions] = useState<PolicyDecisionEvent[]>(() => getPolicyDecisionTimeline())
   const [policyDecisionHistory, setPolicyDecisionHistory] = useState<PolicyDecisionEvent[]>(() => getPolicyDecisionHistory())
+  const [showSettings, setShowSettings] = useState(false)
+  // 模型列表状态
+  const [modelProviders, setModelProviders] = useState<Record<string, { protocol: string; models: string[] }>>({})
+  const [modelLoading, setModelLoading] = useState(true)
+  const [activeModel, setActiveModel] = useState<string>('')
+
+  // 获取模型列表
+  useEffect(() => {
+    sendRpc<{ providers: Record<string, { protocol: string; models: string[] }>; defaultModel: string }>('model:list')
+      .then(res => {
+        if (res?.providers) {
+          setModelProviders(res.providers)
+        }
+        if (res?.defaultModel) {
+          setActiveModel(res.defaultModel)
+        }
+        setModelLoading(false)
+      })
+      .catch(err => {
+        console.error('[Settings] Failed to load models:', err)
+        setModelLoading(false)
+      })
+  }, [])
+
+  // 处理模型选择
+  const handleModelSelect = async (modelId: string) => {
+    const res = await sendRpc<{ success: boolean; error?: string }>('model:switch', { model: modelId })
+    if (res?.success) {
+      setActiveModel(modelId)
+    } else {
+      alert(`Failed to switch model: ${res?.error || 'Unknown error'}`)
+    }
+  }
+
+
+  // 语言、主题、字体等设置状态
+  const [lang, setLang] = useState<Lang>(loadLang)
+  const [theme, setTheme] = useState<Theme>(loadTheme)
+  const [fontSize, setFontSize] = useState<number>(() => {
+    const saved = localStorage.getItem('meshy-font-size')
+    return saved ? parseInt(saved, 10) : 14
+  })
+  const [compactMessages, setCompactMessages] = useState<boolean>(() => {
+    return localStorage.getItem('meshy-compact') === 'true'
+  })
+  const [showReasoning, setShowReasoning] = useState<boolean>(() => {
+    return localStorage.getItem('meshy-show-reasoning') !== 'false'
+  })
+
+  // 应用主题
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme === 'auto') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+    } else {
+      root.setAttribute('data-theme', theme)
+    }
+    localStorage.setItem('meshy-theme', theme)
+  }, [theme])
+
+  // 应用字体大小
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`)
+    localStorage.setItem('meshy-font-size', String(fontSize))
+  }, [fontSize])
+
+  // 应用紧凑消息模式
+  useEffect(() => {
+    document.body.classList.toggle('compact-messages', compactMessages)
+    localStorage.setItem('meshy-compact', String(compactMessages))
+  }, [compactMessages])
+
+  // 应用显示思考过程
+  useEffect(() => {
+    localStorage.setItem('meshy-show-reasoning', String(showReasoning))
+  }, [showReasoning])
+
+  const handleSettingsOpen = useCallback(() => setShowSettings(true), [])
+
+  // 翻译辅助函数（使用当前 lang 状态）
+  const t = (key: string): string => {
+    return translations[lang]?.[key] || key
+  }
 
   // 确保存在当前轮次的 Agent 消息容器，用于挂载 toolCalls / 错误等状态
   const ensureAgentContainer = useCallback((prev: ChatMessage[]): { list: ChatMessage[]; agent: ChatMessage } => {
@@ -400,6 +537,7 @@ function App() {
         connected={connected}
         activeSessionId={activeSession?.id || null}
         onSessionSwitch={handleSessionSwitch}
+        onSettingsOpen={handleSettingsOpen}
       />
       <div className="center-panel">
         <ChatPanel
@@ -417,7 +555,7 @@ function App() {
       </div>
       <RightPanel policyDecisions={policyDecisions} policyDecisionHistory={policyDecisionHistory} />
 
-      {/* Blackboard Drawer (no more floating toggle – it's in InputArea toolbar) */}
+      {/* Blackboard Drawer */}
       <div className={`bb-drawer ${bbOpen ? 'open' : ''}`}>
         <h3>Blackboard</h3>
         {bbGoal ? (
@@ -438,6 +576,336 @@ function App() {
           <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
             Goal and task status will appear here during active sessions.
           </p>
+        )}
+      </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <SettingsModal
+          lang={lang} setLang={setLang}
+          theme={theme} setTheme={setTheme}
+          fontSize={fontSize} setFontSize={setFontSize}
+          compactMessages={compactMessages} setCompactMessages={setCompactMessages}
+          showReasoning={showReasoning} setShowReasoning={setShowReasoning}
+          t={t}
+          modelProviders={modelProviders}
+          modelLoading={modelLoading}
+          activeModel={activeModel}
+          onModelSelect={handleModelSelect}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Settings Modal ───
+function SettingsModal({
+  lang, setLang, theme, setTheme, fontSize, setFontSize,
+  compactMessages, setCompactMessages, showReasoning, setShowReasoning,
+  t, onClose,
+  modelProviders, modelLoading, activeModel, onModelSelect
+}: {
+  lang: Lang; setLang: (l: Lang) => void;
+  theme: Theme; setTheme: (t: Theme) => void;
+  fontSize: number; setFontSize: (s: number) => void;
+  compactMessages: boolean; setCompactMessages: (c: boolean) => void;
+  showReasoning: boolean; setShowReasoning: (s: boolean) => void;
+  t: (key: string) => string;
+  onClose: () => void;
+  modelProviders: Record<string, { protocol: string; models: string[] }>;
+  modelLoading: boolean;
+  activeModel: string;
+  onModelSelect: (modelId: string) => void;
+}) {
+  const [policyMode, setPolicyMode] = useState<'standard' | 'read_only'>('standard')
+  const [loading, setLoading] = useState(true)
+
+  // Load current policy mode
+  useEffect(() => {
+    sendRpc<{ mode: string }>('tool:policy:get')
+      .then(res => {
+        if (res?.mode === 'read_only' || res?.mode === 'standard') {
+          setPolicyMode(res.mode)
+        }
+        setLoading(false)
+      })
+      .catch(err => {
+        console.error('[Settings] Failed to load policy mode:', err)
+        setLoading(false)
+      })
+  }, [])
+
+  const handleTogglePolicy = async () => {
+    const newMode = policyMode === 'standard' ? 'read_only' : 'standard'
+    const res = await sendRpc<{ success: boolean; mode?: string; error?: string }>('tool:policy:set', { mode: newMode })
+    if (res?.success && res.mode) {
+      setPolicyMode(res.mode as 'standard' | 'read_only')
+    } else {
+      alert(`Failed to switch policy mode: ${res?.error || 'Unknown error'}`)
+    }
+  }
+
+  const handleLangSwitch = (l: Lang) => {
+    setLang(l)
+    localStorage.setItem('meshy-lang', l)
+  }
+
+  const handleThemeSwitch = (t: Theme) => {
+    setTheme(t)
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg-secondary, #1e1e2e)',
+          border: '1px solid var(--border, #333)',
+          borderRadius: 12, padding: 24, width: 520, maxWidth: '92vw', maxHeight: '85vh', overflow: 'auto',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h3 style={{ margin: 0, fontSize: 20, color: 'var(--text, #eee)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            ⚙️ {t('settings')}
+          </h3>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: 'none', color: 'var(--text-muted, #888)',
+              cursor: 'pointer', fontSize: 22, padding: 4, display: 'flex', alignItems: 'center'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {loading ? (
+          <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 24 }}>Loading...</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* ── Language ── */}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
+                🌐 {t('language')}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['zh', 'en'] as Lang[]).map(l => (
+                  <button
+                    key={l}
+                    onClick={() => handleLangSwitch(l)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                      border: lang === l ? '2px solid var(--accent, #6366f1)' : '1px solid var(--border, #444)',
+                      background: lang === l ? 'var(--accent-dim)' : 'transparent',
+                      color: lang === l ? 'var(--accent)' : 'var(--text-muted)',
+                      fontWeight: lang === l ? 600 : 400,
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {l === 'zh' ? '🇨🇳 中文' : '🇺🇸 English'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Theme ── */}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
+                🎨 {t('theme')}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['dark', 'light', 'auto'] as Theme[]).map(theme => (
+                  <button
+                    key={theme}
+                    onClick={() => handleThemeSwitch(theme)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                      border: theme === theme ? '2px solid var(--accent, #6366f1)' : '1px solid var(--border, #444)',
+                      background: theme === theme ? 'var(--accent-dim)' : 'transparent',
+                      color: theme === theme ? 'var(--accent)' : 'var(--text-muted)',
+                      fontWeight: theme === theme ? 600 : 400,
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {theme === 'dark' ? '🌑 ' + t('dark') : theme === 'light' ? '☀️ ' + t('light') : '🔄 ' + t('auto')}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Model Selection ── */}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
+                🤖 {t('model')}
+              </div>
+              {modelLoading ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Loading models...</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {Object.entries(modelProviders).map(([providerName, group]) => (
+                    <div key={providerName}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span>{providerName}</span>
+                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{group.protocol}</span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {group.models.map(modelId => {
+                          const fullId = `${providerName}/${modelId}`;
+                          const isSelected = activeModel === fullId;
+                          return (
+                            <button
+                              key={modelId}
+                              onClick={() => onModelSelect(fullId)}
+                              style={{
+                                padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+                                border: isSelected ? '2px solid var(--accent, #6366f1)' : '1px solid var(--border, #444)',
+                                background: isSelected ? 'var(--accent-dim)' : 'transparent',
+                                color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
+                                fontWeight: isSelected ? 600 : 400,
+                                transition: 'all 0.2s',
+                              }}
+                            >
+                              {modelId}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Font Size ── */}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🔤 {t('fontSize')}</span>
+                <span style={{ fontSize: 12, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '2px 8px', borderRadius: 4 }}>
+                  {fontSize}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={12}
+                max={20}
+                value={fontSize}
+                onChange={e => setFontSize(parseInt(e.target.value, 10))}
+                style={{ width: '100%', accentColor: 'var(--accent, #6366f1)', cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)' }}>
+                <span>12px</span>
+                <span>20px</span>
+              </div>
+            </div>
+
+            {/* ── Toggles ── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Compact Messages */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text, #eee)' }}>📦 {t('compactMessages')}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{compactMessages ? 'Less space between messages' : 'Normal spacing'}</div>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 22, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={compactMessages}
+                    onChange={() => setCompactMessages(!compactMessages)}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute', inset: 0, borderRadius: 11,
+                    background: compactMessages ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
+                    transition: 'background 0.2s',
+                  }}>
+                    <span style={{
+                      position: 'absolute', top: 2, left: compactMessages ? 20 : 2,
+                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                      transition: 'left 0.2s',
+                    }} />
+                  </span>
+                </label>
+              </div>
+
+              {/* Show Reasoning */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text, #eee)' }}>🧠 {t('showReasoning')}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{showReasoning ? 'Show AI thinking process' : 'Hide thinking process'}</div>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 22, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={showReasoning}
+                    onChange={() => setShowReasoning(!showReasoning)}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute', inset: 0, borderRadius: 11,
+                    background: showReasoning ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
+                    transition: 'background 0.2s',
+                  }}>
+                    <span style={{
+                      position: 'absolute', top: 2, left: showReasoning ? 20 : 2,
+                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                      transition: 'left 0.2s',
+                    }} />
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* ── Divider ── */}
+            <div style={{ borderTop: '1px solid var(--border, #333)', paddingTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #eee)', marginBottom: 10 }}>
+                🔧 {t('toolPolicy')}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 }}>
+                {policyMode === 'standard' ? t('standardMode') : t('readOnlyMode')}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 22, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={policyMode === 'read_only'}
+                    onChange={handleTogglePolicy}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute', inset: 0, borderRadius: 11,
+                    background: policyMode === 'read_only' ? 'var(--accent, #6366f1)' : 'var(--border, #444)',
+                    transition: 'background 0.2s',
+                  }}>
+                    <span style={{
+                      position: 'absolute', top: 2, left: policyMode === 'read_only' ? 20 : 2,
+                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                      transition: 'left 0.2s',
+                    }} />
+                  </span>
+                </label>
+                <span style={{ fontSize: 13, color: 'var(--text, #eee)' }}>
+                  {policyMode === 'read_only' ? '🔒 ' + t('readOnly') : '🔓 ' + t('standard')}
+                </span>
+              </div>
+            </div>
+
+            {/* ── Footer ── */}
+            <div style={{ borderTop: '1px solid var(--border, #333)', paddingTop: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
+                {t('moreSettings')}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

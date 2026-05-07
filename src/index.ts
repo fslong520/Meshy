@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { loadConfig } from './config/index.js';
 import { Session } from './core/session/state.js';
 import { TaskEngine } from './core/engine/index.js';
@@ -215,6 +216,10 @@ export async function runMeshy(prompt: string, options?: { model?: string | null
     }
 
     console.log(`\n[Meshy] Task completed. Exiting.`);
+
+    // 释放本地 ERNIE 小模型资源
+    engine.shutdown();
+
     process.exit(0);
 }
 
@@ -1091,6 +1096,15 @@ export async function runServer(port: number) {
             }
         }
     });
+
+    // 进程退出时清理本地小模型资源
+    const cleanup = () => {
+        console.log('\n[Meshy] Shutting down server, cleaning up local models...');
+        engine.shutdown();
+        process.exit(0);
+    };
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
 
     console.log(`\n[Meshy] Server mode active. Waiting for connections on port ${port}...`);
     console.log(`[Meshy] Open http://localhost:${port} in your browser.`);
