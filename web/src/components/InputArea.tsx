@@ -43,6 +43,10 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     const [mentionQuery, setMentionQuery] = useState('') // raw text after @, e.g. 'agent:cod'
     const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
+    // ↑↓ 历史消息选择
+    const [messageHistory, setMessageHistory] = useState<string[]>([])
+    const [historyIndex, setHistoryIndex] = useState(-1) // -1 = 新输入, 0 = 最新, 1 = 次新...
+
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     useEffect(() => {
@@ -83,16 +87,21 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     const handleSend = useCallback(() => {
         if ((!text.trim() && attachments.length === 0) || disabled) return
 
-        onSend(text.trim(), mode, attachments)
+        const msg = text.trim()
+        onSend(msg, mode, attachments)
+        // 记入历史（不记重复、不记空）
+        if (msg && (messageHistory.length === 0 || messageHistory[0] !== msg)) {
+            setMessageHistory(prev => [msg, ...prev].slice(0, 50)) // 最多 50 条
+        }
         setText('')
         setAttachments([])
         setOmnibarVisible(false)
         setMentionVisible(false)
         setSelectedIndex(0)
         setMentionSelectedIndex(0)
-        // 重置高度
+        setHistoryIndex(-1)
         if (textareaRef.current) textareaRef.current.style.height = '44px'
-    }, [text, disabled, onSend, mode, attachments])
+    }, [text, disabled, onSend, mode, attachments, messageHistory])
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || [])
@@ -242,6 +251,36 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
             } else if (e.key === 'Escape') {
                 e.preventDefault()
                 setMentionVisible(false)
+                return
+            }
+        }
+
+        // ↑↓ 历史消息导航（仅在无弹出菜单时生效）
+        if (!omnibarVisible && !mentionVisible && messageHistory.length > 0) {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                const nextIdx = historyIndex === -1 ? 0 : Math.min(historyIndex + 1, messageHistory.length - 1)
+                setHistoryIndex(nextIdx)
+                setText(messageHistory[nextIdx])
+                // 光标移到末尾
+                requestAnimationFrame(() => {
+                    if (textareaRef.current) {
+                        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = textareaRef.current.value.length
+                    }
+                })
+                return
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                if (historyIndex <= 0) {
+                    // 回到新输入
+                    setHistoryIndex(-1)
+                    setText('')
+                } else {
+                    const nextIdx = historyIndex - 1
+                    setHistoryIndex(nextIdx)
+                    setText(messageHistory[nextIdx])
+                }
                 return
             }
         }
