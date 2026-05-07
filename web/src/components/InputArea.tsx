@@ -43,9 +43,9 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     const [mentionQuery, setMentionQuery] = useState('') // raw text after @, e.g. 'agent:cod'
     const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
-    // ↑↓ 历史消息选择
-    const [messageHistory, setMessageHistory] = useState<string[]>([])
-    const [historyIndex, setHistoryIndex] = useState(-1) // -1 = 新输入, 0 = 最新, 1 = 次新...
+    // ↑↓ 历史消息选择（用 ref 避免闭包问题）
+    const historyRef = useRef<string[]>([])
+    const historyIdxRef = useRef(-1) // -1 = 新输入, 0 = 最新, 1 = 次新...
 
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -89,19 +89,19 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
 
         const msg = text.trim()
         onSend(msg, mode, attachments)
-        // 记入历史（不记重复、不记空）
-        if (msg && (messageHistory.length === 0 || messageHistory[0] !== msg)) {
-            setMessageHistory(prev => [msg, ...prev].slice(0, 50)) // 最多 50 条
+        // 记入历史（不记重复、不记空，直接操作 ref）
+        if (msg && (historyRef.current.length === 0 || historyRef.current[0] !== msg)) {
+            historyRef.current = [msg, ...historyRef.current].slice(0, 50)
         }
+        historyIdxRef.current = -1
         setText('')
         setAttachments([])
         setOmnibarVisible(false)
         setMentionVisible(false)
         setSelectedIndex(0)
         setMentionSelectedIndex(0)
-        setHistoryIndex(-1)
         if (textareaRef.current) textareaRef.current.style.height = '44px'
-    }, [text, disabled, onSend, mode, attachments, messageHistory])
+    }, [text, disabled, onSend, mode, attachments])
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || [])
@@ -255,14 +255,13 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
             }
         }
 
-        // ↑↓ 历史消息导航（仅在无弹出菜单时生效）
-        if (!omnibarVisible && !mentionVisible && messageHistory.length > 0) {
+        // ↑↓ 历史消息导航（直接用 ref，无闭包问题）
+        if (!omnibarVisible && !mentionVisible && historyRef.current.length > 0) {
             if (e.key === 'ArrowUp') {
                 e.preventDefault()
-                const nextIdx = historyIndex === -1 ? 0 : Math.min(historyIndex + 1, messageHistory.length - 1)
-                setHistoryIndex(nextIdx)
-                setText(messageHistory[nextIdx])
-                // 光标移到末尾
+                const idx = historyIdxRef.current === -1 ? 0 : Math.min(historyIdxRef.current + 1, historyRef.current.length - 1)
+                historyIdxRef.current = idx
+                setText(historyRef.current[idx])
                 requestAnimationFrame(() => {
                     if (textareaRef.current) {
                         textareaRef.current.selectionStart = textareaRef.current.selectionEnd = textareaRef.current.value.length
@@ -272,14 +271,12 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
             }
             if (e.key === 'ArrowDown') {
                 e.preventDefault()
-                if (historyIndex <= 0) {
-                    // 回到新输入
-                    setHistoryIndex(-1)
+                if (historyIdxRef.current <= 0) {
+                    historyIdxRef.current = -1
                     setText('')
                 } else {
-                    const nextIdx = historyIndex - 1
-                    setHistoryIndex(nextIdx)
-                    setText(messageHistory[nextIdx])
+                    historyIdxRef.current--
+                    setText(historyRef.current[historyIdxRef.current])
                 }
                 return
             }
