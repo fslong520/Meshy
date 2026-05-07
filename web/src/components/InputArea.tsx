@@ -469,8 +469,7 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
                     value={text}
                     onChange={handleInput}
                     onKeyDown={handleKeyDown}
-                    placeholder="Type your message... (@ for files, / for commands, + for skills)"
-                    disabled={disabled}
+                    placeholder={disabled ? '正在思考…（↑↓查看历史）' : '输入消息…（@=文件, /=命令, ↑↓=历史）'}
                     rows={1}
                 />
                 {disabled ? (
