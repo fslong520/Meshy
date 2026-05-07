@@ -7,12 +7,11 @@ import {
   clearPolicyDecisionHistory,
   getPolicyDecisionHistory,
   getPolicyDecisionTimeline,
-  replacePolicyDecisionHistory,
   replacePolicyDecisionTimeline,
+  replacePolicyDecisionHistory,
   type ChatMessage,
   type RpcMessage,
   type PolicyDecisionEvent,
-  type ToolCallInfo,
 } from './store/ws'
 import { attachToolError, upsertToolCallById } from './store/tool-call-linking'
 import { hydrateReplayView } from './store/replay-hydration'
@@ -117,7 +116,7 @@ function App() {
         if (res?.replay) {
           const hydrated = hydrateReplayView(res.replay)
           setMessages(hydrated.messages)
-          setActiveSession({ id: res.sessionId, title: res.replay.title })
+          setActiveSession({ id: res.sessionId, title: res.replay.session.title || '' })
           setBbGoal(res.replay.blackboard.currentGoal)
           setBbTasks(res.replay.blackboard.tasks)
           replacePolicyDecisionTimeline(hydrated.policyDecisions)
@@ -471,13 +470,13 @@ function App() {
         }
       }
 
-      const policyDecision = {
+      const policyDecision = mergePolicyDecision({
         decision,
         mode,
         permissionClass,
         reason,
         timestamp: data.timestamp,
-      }
+      })
 
       if (matchedIndex >= 0) {
         const target = list[matchedIndex]
@@ -682,7 +681,7 @@ interface CustomProviderInfo {
 }
 
 function SettingsModal({
-  lang, setLang, theme, setTheme, fontSize, setFontSize,
+  lang, setLang, setTheme, fontSize, setFontSize,
   compactMessages, setCompactMessages, showReasoning, setShowReasoning,
   t, onClose,
   modelProviders, modelLoading, activeModel, onModelSelect,

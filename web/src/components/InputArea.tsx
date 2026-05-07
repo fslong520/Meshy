@@ -22,7 +22,7 @@ interface Props {
 }
 
 export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersion }: Props) {
-    const [text, setText] = useState('')
+    // textarea 改为非受控，不再需要 text state
     const [attachments, setAttachments] = useState<{ name: string, type: string, data: string }[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
     const [mode, setMode] = useState<'standard' | 'smart' | 'auto'>('smart')
@@ -46,44 +46,8 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     // ↑↓ 历史消息选择
     const historyRef = useRef<string[]>([])
     const historyIdxRef = useRef(-1)
-    // 同步 omnibar/mention 状态到 ref，供原生 keydown 监听器读取
-    const omnibarRef = useRef(false)
-    const mentionRef = useRef(false)
-    omnibarRef.current = omnibarVisible
-    mentionRef.current = mentionVisible
 
     const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-    // 原生 keydown 监听（绕过 React 合成事件问题）
-    useEffect(() => {
-        const el = textareaRef.current
-        if (!el) return
-        const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
-            if (omnibarRef.current || mentionRef.current) return // 弹出菜单打开时不干扰
-            const h = historyRef.current
-            if (h.length === 0) return
-            e.preventDefault()
-            if (e.key === 'ArrowUp') {
-                const idx = historyIdxRef.current === -1 ? 0 : Math.min(historyIdxRef.current + 1, h.length - 1)
-                historyIdxRef.current = idx
-                el.value = h[idx]
-                setText(h[idx])
-            } else {
-                if (historyIdxRef.current <= 0) {
-                    historyIdxRef.current = -1
-                    el.value = ''
-                    setText('')
-                } else {
-                    historyIdxRef.current--
-                    el.value = h[historyIdxRef.current]
-                    setText(h[historyIdxRef.current])
-                }
-            }
-        }
-        el.addEventListener('keydown', onKeyDown)
-        return () => el.removeEventListener('keydown', onKeyDown)
-    }, [])
 
     useEffect(() => {
         sendRpc<{ providers: Record<string, { protocol: string, models: string[] }>, defaultModel: string }>('model:list').then((res) => {
@@ -121,23 +85,25 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     }
 
     const handleSend = useCallback(() => {
-        if ((!text.trim() && attachments.length === 0) || disabled) return
+        const val = textareaRef.current?.value.trim() || ''
+        if ((!val && attachments.length === 0) || disabled) return
 
-        const msg = text.trim()
-        onSend(msg, mode, attachments)
-        // 记入历史（不记重复、不记空，直接操作 ref）
-        if (msg && (historyRef.current.length === 0 || historyRef.current[0] !== msg)) {
-            historyRef.current = [msg, ...historyRef.current].slice(0, 50)
+        onSend(val, mode, attachments)
+        // 记入历史（不记重复、不记空）
+        if (val && (historyRef.current.length === 0 || historyRef.current[0] !== val)) {
+            historyRef.current = [val, ...historyRef.current].slice(0, 50)
         }
         historyIdxRef.current = -1
-        setText('')
+        if (textareaRef.current) {
+            textareaRef.current.value = ''
+            textareaRef.current.style.height = '44px'
+        }
         setAttachments([])
         setOmnibarVisible(false)
         setMentionVisible(false)
         setSelectedIndex(0)
         setMentionSelectedIndex(0)
-        if (textareaRef.current) textareaRef.current.style.height = '44px'
-    }, [text, disabled, onSend, mode, attachments])
+    }, [disabled, onSend, mode, attachments])
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || [])
@@ -214,37 +180,66 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     }, [mentionParsed, mentionItems])
 
     const applyCommand = (cmdName: string) => {
-        setText(`/${cmdName} `)
-        setOmnibarVisible(false)
-        setSelectedIndex(0)
         if (textareaRef.current) {
+            textareaRef.current.value = `/${cmdName} `
             textareaRef.current.focus()
         }
+        setOmnibarVisible(false)
+        setSelectedIndex(0)
     }
 
     const applyMention = (item: { namespace: string; label?: string; name?: string; emoji?: string }) => {
+        const el = textareaRef.current
+        if (!el) return
+        const currentText = el.value
         if (!mentionParsed.namespace) {
-            // User selected a namespace category → drill into second level
-            const newText = text.replace(/@[^\s]*$/, `@${item.namespace}:`)
-            setText(newText)
+            el.value = currentText.replace(/@[^\s]*$/, `@${item.namespace}:`)
             setMentionQuery(`${item.namespace}:`)
             setMentionSelectedIndex(0)
-            // Explicitly keep popover open for second-level display
             setMentionVisible(true)
-            if (textareaRef.current) textareaRef.current.focus()
+            el.focus()
             return
         }
-        // User selected a specific entity → apply and close
         const entityName = item.name || item.label || ''
         const ns = mentionParsed.namespace
-        const newText = text.replace(/@[^\s]*$/, `@${ns}:${entityName} `)
-        setText(newText)
+        el.value = currentText.replace(/@[^\s]*$/, `@${ns}:${entityName} `)
         setMentionVisible(false)
         setMentionSelectedIndex(0)
-        if (textareaRef.current) textareaRef.current.focus()
+        el.focus()
     }
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
+        // Handle ↑↓ history navigation (在非弹出菜单状态下)
+        if (!omnibarVisible && !mentionVisible && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            const h = historyRef.current
+            if (h.length === 0) return
+            e.preventDefault()
+            if (e.key === 'ArrowUp') {
+                const idx = historyIdxRef.current === -1 ? 0 : Math.min(historyIdxRef.current + 1, h.length - 1)
+                historyIdxRef.current = idx
+                if (textareaRef.current) {
+                    textareaRef.current.value = h[idx]
+                    // 触发 input 事件以更新弹出菜单状态
+                    textareaRef.current.dispatchEvent(new Event('input', { bubbles: true }))
+                }
+            } else {
+                if (historyIdxRef.current <= 0) {
+                    historyIdxRef.current = -1
+                    if (textareaRef.current) {
+                        textareaRef.current.value = ''
+                        textareaRef.current.dispatchEvent(new Event('input', { bubbles: true }))
+                    }
+                } else {
+                    historyIdxRef.current--
+                    if (textareaRef.current) {
+                        textareaRef.current.value = h[historyIdxRef.current]
+                        textareaRef.current.dispatchEvent(new Event('input', { bubbles: true }))
+                    }
+                }
+            }
+            return
+        }
+
         // Handle Omnibar keyboard navigation
         if (omnibarVisible && filteredCommands.length > 0) {
             if (e.key === 'ArrowDown') {
@@ -301,11 +296,9 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
         sendRpc('session:interrupt', {})
     }, [])
 
-    // 自动增高
+    // 自动增高 + 弹出菜单检测（非受控，从 e.target 取值）
     const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const val = e.target.value
-        setText(val)
-
         // Show omnibar if text starts with '/'
         if (val.startsWith('/')) {
             const parts = val.split(' ')
@@ -320,8 +313,7 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
         } else {
             setOmnibarVisible(false)
         }
-
-        // Detect @ mention trigger: find the last @ that isn't followed by a space
+        // Detect @ mention trigger
         const atMatch = val.match(/@([^\s]*)$/)
         if (atMatch) {
             setMentionVisible(true)
@@ -330,7 +322,6 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
         } else {
             setMentionVisible(false)
         }
-
         const el = e.target
         el.style.height = '44px'
         el.style.height = Math.min(el.scrollHeight, 200) + 'px'
@@ -471,11 +462,11 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
                 </div>
             )}
 
-            {/* Input Row */}
+            {/* Input Row — 非受控模式，直接操作 DOM 避免 React 覆盖 ↑↓ 历史切换 */}
             <div className="input-row">
                 <textarea
                     ref={textareaRef}
-                    value={text}
+                    defaultValue=""
                     onChange={handleInput}
                     onKeyDown={handleKeyDown}
                     placeholder={disabled ? '正在思考…（↑↓查看历史）' : '输入消息…（@=文件, /=命令, ↑↓=历史）'}
@@ -486,7 +477,7 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
                         <span style={{ fontSize: '12px' }}>🛑</span>
                     </button>
                 ) : (
-                    <button className="send-btn" onClick={handleSend} disabled={!text.trim()}>
+                    <button className="send-btn" onClick={handleSend}>
                         <Send size={16} />
                     </button>
                 )}

@@ -1,5 +1,5 @@
 import type { ChatMessage, PolicyDecisionEvent } from './ws'
-import type { ReplayEvent, ReplayExport, ReplayStep } from '../../../src/shared/replay-contract.js'
+import type { ReplayEvent, ReplayExport } from '../../../src/shared/replay-contract.js'
 import { normalizeReplayEvents } from '../../../src/shared/replay-normalization.js'
 import { normalizeReplayExport } from '../../../src/shared/replay-export-normalization.js'
 import { getReplayStepProjection } from '../../../src/shared/replay-step-projection.js'

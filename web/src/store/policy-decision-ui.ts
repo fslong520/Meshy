@@ -1,4 +1,4 @@
-import type { PolicyDecisionEvent, ToolCallInfo } from './ws'
+import type { ToolCallInfo } from './ws'
 
 export type ToolPolicyDecision = NonNullable<ToolCallInfo['policyDecision']>
 
