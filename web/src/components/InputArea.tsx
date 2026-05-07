@@ -43,11 +43,47 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
     const [mentionQuery, setMentionQuery] = useState('') // raw text after @, e.g. 'agent:cod'
     const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
-    // ↑↓ 历史消息选择（用 ref 避免闭包问题）
+    // ↑↓ 历史消息选择
     const historyRef = useRef<string[]>([])
-    const historyIdxRef = useRef(-1) // -1 = 新输入, 0 = 最新, 1 = 次新...
+    const historyIdxRef = useRef(-1)
+    // 同步 omnibar/mention 状态到 ref，供原生 keydown 监听器读取
+    const omnibarRef = useRef(false)
+    const mentionRef = useRef(false)
+    omnibarRef.current = omnibarVisible
+    mentionRef.current = mentionVisible
 
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+    // 原生 keydown 监听（绕过 React 合成事件问题）
+    useEffect(() => {
+        const el = textareaRef.current
+        if (!el) return
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+            if (omnibarRef.current || mentionRef.current) return // 弹出菜单打开时不干扰
+            const h = historyRef.current
+            if (h.length === 0) return
+            e.preventDefault()
+            if (e.key === 'ArrowUp') {
+                const idx = historyIdxRef.current === -1 ? 0 : Math.min(historyIdxRef.current + 1, h.length - 1)
+                historyIdxRef.current = idx
+                el.value = h[idx]
+                setText(h[idx])
+            } else {
+                if (historyIdxRef.current <= 0) {
+                    historyIdxRef.current = -1
+                    el.value = ''
+                    setText('')
+                } else {
+                    historyIdxRef.current--
+                    el.value = h[historyIdxRef.current]
+                    setText(h[historyIdxRef.current])
+                }
+            }
+        }
+        el.addEventListener('keydown', onKeyDown)
+        return () => el.removeEventListener('keydown', onKeyDown)
+    }, [])
 
     useEffect(() => {
         sendRpc<{ providers: Record<string, { protocol: string, models: string[] }>, defaultModel: string }>('model:list').then((res) => {
@@ -251,33 +287,6 @@ export function InputArea({ onSend, disabled, bbOpen, onToggleBb, modelListVersi
             } else if (e.key === 'Escape') {
                 e.preventDefault()
                 setMentionVisible(false)
-                return
-            }
-        }
-
-        // ↑↓ 历史消息导航（直接用 ref，无闭包问题）
-        if (!omnibarVisible && !mentionVisible && historyRef.current.length > 0) {
-            if (e.key === 'ArrowUp') {
-                e.preventDefault()
-                const idx = historyIdxRef.current === -1 ? 0 : Math.min(historyIdxRef.current + 1, historyRef.current.length - 1)
-                historyIdxRef.current = idx
-                setText(historyRef.current[idx])
-                requestAnimationFrame(() => {
-                    if (textareaRef.current) {
-                        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = textareaRef.current.value.length
-                    }
-                })
-                return
-            }
-            if (e.key === 'ArrowDown') {
-                e.preventDefault()
-                if (historyIdxRef.current <= 0) {
-                    historyIdxRef.current = -1
-                    setText('')
-                } else {
-                    historyIdxRef.current--
-                    setText(historyRef.current[historyIdxRef.current])
-                }
                 return
             }
         }
