@@ -248,34 +248,20 @@ export function loadConfig(runtimeOverrides: Partial<Config> = {}): Config {
         },
     };
 
+    // ── 本地 ERNIE-4.5-0.3B 模型（作为可选 provider，用户手动切换） ──
+    // 无需 API Key，通过 Python 子进程在本地运行
+    // 使用: /model local-ernie/ernie-4.5-0.3b 或从 Web UI 切换
+    envProviders['local-ernie'] = {
+        sdk: '_local_ernie_',  // 特殊标记，ProviderResolver 会创建 LocalERNIEAdapter
+        apiKey: '',
+        models: {
+            'ernie-4.5-0.3b': { name: 'ERNIE 4.5 0.3B (本地模型)' },
+        },
+    };
+
     const envConfig: Record<string, any> = {};
     if (Object.keys(envProviders).length > 0) {
         envConfig.providers = envProviders;
-    }
-
-    // 当免费降级启用时，自动选择免费模型作为 fallback（如果用户没手动改过 fallback）
-    const mergedTmp = deepMerge(
-        configSchema.parse({}),
-        globalConfig,
-        projectConfig,
-        envConfig,
-    );
-    const isFallbackStillDefault = mergedTmp.models?.fallback === 'openai/gpt-4o' ||
-        mergedTmp.models?.fallback === mergedTmp.models?.default;
-    const freeProviderName = mergedTmp.models?.free?.provider || 'opencode';
-    const freeEnabled = mergedTmp.models?.free?.enabled !== false;
-
-    if (freeEnabled && isFallbackStillDefault && envProviders[freeProviderName]) {
-        const freeModels = Object.keys(envProviders[freeProviderName].models || {});
-        // 优先选标了 "(Free)" 的模型
-        // 按可靠性排序：minimax-m2.5-free > hy3-preview-free > nemotron-3-super-free > big-pickle
-        const freeModelPriority = ['minimax-m2.5-free', 'hy3-preview-free', 'nemotron-3-super-free', 'big-pickle'];
-        const freeModel = freeModelPriority.find(m => freeModels.includes(m)) || freeModels[0];
-        if (freeModel) {
-            envConfig.models = envConfig.models || {};
-            envConfig.models.fallback = `${freeProviderName}/${freeModel}`;
-            console.log(`[Config] OpenCode Zen free model detected. Auto-set fallback to: ${envConfig.models.fallback}`);
-        }
     }
 
     // Merge order: Base Defaults -> Global -> Project -> Env -> Runtime

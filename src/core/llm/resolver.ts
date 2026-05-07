@@ -8,6 +8,7 @@
 import { ILLMProvider } from './provider.js';
 import { VercelAIAdapter } from './vercel-ai.js';
 import { LocalEmbeddingAdapter } from './local-embedding.js';
+import { LocalERNIEAdapter } from './local-ernie.js';
 import { Config, ProviderConfig } from '../../config/index.js';
 
 export interface ProviderInfo {
@@ -353,7 +354,12 @@ export class ProviderResolver {
             throw new Error(`Provider "${providerName}" has neither "sdk" nor "protocol" configured.`);
         }
 
-        instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey || '', modelId, cfg.baseUrl);
+        // 本地 ERNIE 模型走特殊路径
+        if (sdkOrProtocol === '_local_ernie_') {
+            instance = new LocalERNIEAdapter();
+        } else {
+            instance = new VercelAIAdapter(sdkOrProtocol, cfg.apiKey || '', modelId, cfg.baseUrl);
+        }
 
         this.instances.set(cacheKey, instance);
         return instance;

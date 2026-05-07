@@ -1250,80 +1250,17 @@ export class TaskEngine {
                     this.logger.error('ENGINE', `Retry ${retries}/${this.maxRetries}: ${message}`);
                     console.error(`\n[Engine] Retry ${retries}/${this.maxRetries}: ${message}`);
 
-                    // Phase 14: Graceful Degradation (Fallback) Mechanism
-                    // If we detect an API dropout, timeout, rate limit, token exhaustion, or server error, we attempt a fallback.
-                    const isApiFailure = /429|500|502|503|504|timeout|failed to fetch|econnreset|ehostunreach|parse url|invalid url|fetch failed|network|econnrefused|enotfound|socket/i.test(message);
-                    const isTokenExhaustion = ProviderResolver.isTokenExhaustionError(message);
-
-                    let fallbackTriggered = false;
-                    if (isApiFailure || isTokenExhaustion) {
-                        // 第一优先：用户配置的 fallback 模型
-                        let fallbackProvider: ILLMProvider | null = null;
-
-                        if (isTokenExhaustion) {
-                            // token 耗尽时，优先尝试免费模型
-                            fallbackProvider = this.providerResolver.getFreeProvider();
-                            if (fallbackProvider) {
-                                console.log(`\n[Token Exhaustion] API tokens exhausted (${message}). Falling back to FREE model provider...`);
-                                this.logger.engine(`Token exhaustion detected. Switching to FREE provider.`);
-                                this.addMessageAndAppend({
-                                    role: 'user',
-                                    content: `⚠️ System: Primary LLM tokens exhausted (${message}). Automatically switched to FREE emergency model. Functionality may be limited.`,
-                                });
-                                activeLLM = fallbackProvider;
-                                fallbackTriggered = true;
-                            }
-                        }
-
-                        if (!fallbackTriggered) {
-                            fallbackProvider = this.providerResolver.getFallbackProvider();
-                            // 用 provider 名称做比较，而非对象引用（避免缓存实例导致的恒等判断失败）
-                            const isSameProvider = activeLLM === fallbackProvider;
-                            if (fallbackProvider && !isSameProvider) {
-                                const reason = isTokenExhaustion ? 'token exhaustion' : 'API failure';
-                                console.log(`\n[Graceful Degradation] Primary LLM ${reason} (${message}). Falling back to backup provider...`);
-                                this.logger.engine(`Switching to Fallback Provider due to ${reason}: ${message}`);
-                                this.addMessageAndAppend({
-                                    role: 'user',
-                                    content: `System Warning: Primary LLM ${reason} (${message}). Switched to Backup Fallback Model. Please continue task exactly where you left off.`,
-                                });
-                                activeLLM = fallbackProvider;
-                                fallbackTriggered = true;
-                            }
-                        }
-                    }
-
-                    if (!fallbackTriggered) {
-                        this.addMessageAndAppend({
-                            role: 'user',
-                            content: `System Error: ${message}. Please self-correct or ask the user for help.`,
-                        });
-                        this.daemon?.broadcast('agent:text', {
-                            text: `\n⚠️ 系统提示: ${message}\n`,
-                            id: `sys-${Date.now()}`,
-                        });
-
-                        // 最终兜底：所有远程模型都失败时，切换到本地 ERNIE-0.3B
-                        if (this.localERNIE) {
-                            console.log(`\n[Local Fallback] All remote LLMs failed. Switching to local ERNIE-0.3B model...`);
-                            this.logger.engine(`All remote LLMs failed. Switching to local ERNIE-0.3B.`);
-                            this.addMessageAndAppend({
-                                role: 'user',
-                                content: `⚠️ System: All remote LLMs failed (${message}). Switching to LOCAL ERNIE-0.3B model. Responses will be less capable but the conversation continues.`,
-                            });
-                            this.daemon?.broadcast('agent:text', {
-                                text: `\n⚠️ [本地模式] 远程模型不可用，切换到本地 ERNIE-0.3B 模型继续...\n`,
-                                id: `sys-${Date.now()}`,
-                            });
-                            activeLLM = this.localERNIE;
-                            // 重置重试计数，让本地模型有机会执行
-                            retries = 0;
-                            fallbackTriggered = true;
-                        }
-                    }
+                    this.addMessageAndAppend({
+                        role: 'user',
+                        content: `System Error: ${message}. Please self-correct or ask the user for help.`,
+                    });
+                    this.daemon?.broadcast('agent:text', {
+                        text: `\n⚠️ 系统提示: ${message}\n请检查 API Key 或切换到其他模型。可用 /model 命令查看可选模型。\n`,
+                        id: `sys-${Date.now()}`,
+                    });
 
                     // Phase 19: Aggressive context compression on sequential errors
-                    if (retries >= 2 && !fallbackTriggered) {
+                    if (retries >= 2) {
                         try {
                             console.log(`\n[Engine] High retry count detected. Triggering forced context compaction to save context window...`);
                             this.logger.engine('Triggering forced context compaction on retry loop.');
