@@ -119,6 +119,8 @@ export class TaskEngine {
     private session: Session;
     private maxRetries: number;
 
+    private messageQueue: { userPrompt: string; context?: { mode?: string; attachments?: { name: string; type: string; data: string }[] }; resolve: () => void }[] = [];
+
     // Phase 2 组件
     private router: IntentRouter;
     private skillRegistry: SkillRegistry;
@@ -676,11 +678,16 @@ export class TaskEngine {
      * Main execution loop.
      * Phase 2 增强：先走 InputParser 控制语法 → IntentRouter 分类 → LazyInjector 动态组装。
      */
-    public async runTask(userPrompt: string, context?: { mode?: string, attachments?: { name: string, type: string, data: string }[] }): Promise<void> {
+    public async runTask(userPrompt: string, context?: { mode?: string; attachments?: { name: string; type: string; data: string }[] }): Promise<void> {
         if (this.isRunning) {
-            console.log(`[Engine] Mission already in progress. Ignoring new input: ${userPrompt}`);
-            this.daemon?.broadcast('agent:text', { text: '\n[System]: A task is currently running. Please wait or stop it first.\n', id: `sys-${Date.now()}` });
-            return;
+            return new Promise<void>((resolve) => {
+                this.messageQueue.push({ userPrompt, context, resolve });
+                console.log(`[Engine] Queued message (${this.messageQueue.length} pending): ${userPrompt.slice(0, 50)}`);
+                this.daemon?.broadcast('agent:text', {
+                    text: `\n[System]: 当前任务执行中，消息已加入队列（${this.messageQueue.length} 条待处理）。\n`,
+                    id: `sys-${Date.now()}`,
+                });
+            });
         }
 
         this.isRunning = true;
@@ -689,6 +696,18 @@ export class TaskEngine {
         try {
             await this._runTaskInternal(userPrompt, context);
         } finally {
+            while (this.messageQueue.length > 0) {
+                const next = this.messageQueue.shift()!;
+                console.log(`[Engine] Processing queued message (${this.messageQueue.length} remaining): ${next.userPrompt.slice(0, 50)}`);
+                try {
+                    this.abortController = new AbortController();
+                    await this._runTaskInternal(next.userPrompt, next.context);
+                } catch (err) {
+                    console.error('[Engine] Queued task failed:', err instanceof Error ? err.message : String(err));
+                } finally {
+                    next.resolve();
+                }
+            }
             this.isRunning = false;
         }
     }
@@ -1086,57 +1105,42 @@ export class TaskEngine {
         decision: import('../router/intent.js').RoutingDecision,
         basePrompt: string,
     ): Promise<void> {
-        let currentParsed = parsed;
-        let currentDecision = decision;
+        const injection = await this.injector.resolve(
+            parsed,
+            decision,
+            basePrompt,
+            this.session,
+            this.providerResolver,
+            this.workspace.rootPath,
+        );
 
-        while (true) {
-            const injection = await this.injector.resolve(
-                currentParsed,
-                currentDecision,
-                basePrompt,
-                this.session,
-                this.providerResolver,
-                this.workspace.rootPath,
-            );
-
-            if (!Array.isArray((this.session as any).runtimeDecisions)) {
-                (this.session as any).runtimeDecisions = [];
-            }
-
-            const appendRuntimeDecision = (this.session as any).appendRuntimeDecision;
-            const nextLoopIndex = (this.session as any).runtimeDecisions.length;
-            const decisionRecord = {
-                loopIndex: nextLoopIndex,
-                injectedSkills: injection.selectedSkills ?? [],
-                activeMcpServers: Array.from(this.session.activatedMcpServers ?? []),
-                reasonSummary: injection.reasonSummary,
-            };
-
-            if (typeof appendRuntimeDecision === 'function') {
-                appendRuntimeDecision.call(this.session, decisionRecord);
-            } else {
-                (this.session as any).runtimeDecisions.push(decisionRecord);
-            }
-
-            const loopResult = await this.runSingleLLMIteration(injection);
-            if (!loopResult?.continueLoop) break;
-
-            currentParsed = {
-                ...currentParsed,
-                cleanText: loopResult.nextUserPrompt || currentParsed.cleanText,
-            };
-            currentDecision = currentDecision;
+        if (!Array.isArray((this.session as any).runtimeDecisions)) {
+            (this.session as any).runtimeDecisions = [];
         }
-    }
 
-    private async runSingleLLMIteration(injection: import('../injector/lazy.js').InjectionResult): Promise<any> {
+        const appendRuntimeDecision = (this.session as any).appendRuntimeDecision;
+        const nextLoopIndex = (this.session as any).runtimeDecisions.length;
+        const decisionRecord = {
+            loopIndex: nextLoopIndex,
+            injectedSkills: injection.selectedSkills ?? [],
+            activeMcpServers: Array.from(this.session.activatedMcpServers ?? []),
+            reasonSummary: injection.reasonSummary,
+        };
+
+        if (typeof appendRuntimeDecision === 'function') {
+            appendRuntimeDecision.call(this.session, decisionRecord);
+        } else {
+            (this.session as any).runtimeDecisions.push(decisionRecord);
+        }
+
+        // 直接调用 runLLMLoop，由其处理所有 ReAct 轮次
         await this.runLLMLoop(injection);
-        return { continueLoop: false };
     }
 
     private async runLLMLoop(injection: import('../injector/lazy.js').InjectionResult): Promise<void> {
         let isDone = false;
         let retries = 0;
+        let loopCount = 0;
 
         let activeLLM: import('../llm/provider.js').ILLMProvider;
         if (injection.subagent && injection.subagent.model) {
@@ -1147,6 +1151,8 @@ export class TaskEngine {
 
         try {
             while (!isDone && retries < this.maxRetries) {
+                loopCount++;
+                console.log(`[Engine] === WHILE LOOP iteration #${loopCount} started (isDone=${isDone}, retries=${retries}, maxRetries=${this.maxRetries}) ===`);
                 if (this.abortController?.signal.aborted) {
                     console.log('\n[Engine] Loop aborted by signal.');
                     break;
@@ -1247,12 +1253,16 @@ export class TaskEngine {
                         }
                     });
 
+                    console.log(`[Engine] Stream done. isDone=${isDone}, pendingToolCalls=${pendingToolCalls.length}, fullResponseText.length=${fullResponseText.length}, loopCount=${loopCount}`);
+
                     if (pendingToolCalls.length === 0) {
-                        this.addMessageAndAppend({ role: 'assistant', content: fullResponseText });
+                        console.log(`[Engine] No tool calls → setting isDone=true and BREAKING. Loop exits after ${loopCount} iterations.`);
+                        this.addMessageAndAppend({ role: 'assitant', content: fullResponseText });
                         isDone = true;
                         break;
                     }
 
+                    console.log(`[Engine] ${pendingToolCalls.length} tool calls detected → setting isDone=false, executing tools...`);
                     isDone = false;
 
                     // 1. Add ALL tool_call messages to history first
@@ -1302,7 +1312,10 @@ export class TaskEngine {
                     // Phase 5: 响应也写入快照
                     this.workspace.snapshotManager.appendStateUpdate(this.session);
 
+                    console.log(`[Engine] Tool execution done. isDone=${isDone}, retries=${retries}. While loop condition will be checked next.`);
+
                 } catch (err: unknown) {
+                    console.log(`[Engine] CAUGHT ERROR in loop #${loopCount}: ${err instanceof Error ? err.message : String(err)}`);
                     if ((err as any).isSandboxRejection) {
                         this.logger.error('ENGINE', `Action denied by Sandbox. Aborting execution loop.`);
                         console.log(`\n[Engine] Action denied by Sandbox. Aborting execution loop.`);
@@ -1357,6 +1370,7 @@ export class TaskEngine {
                 });
             }
         } finally {
+            console.log(`[Engine] runLLMLoop FINALLY block. Exited after ${loopCount} iterations. isDone=${isDone}, retries=${retries}`);
             this.session.clearActivatedTools();
             this.daemon?.broadcast('agent:done', {});
             this.workspace.reflectionEngine.onSessionComplete({ session: this.session }).catch(() => { });

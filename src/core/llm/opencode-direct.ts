@@ -61,6 +61,17 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
                 temperature: prompt.temperature ?? 0.3,
             };
             if (prompt.topP !== undefined) body.top_p = prompt.topP;
+            if (prompt.tools && prompt.tools.length > 0) {
+                body.tools = prompt.tools.map(t => ({
+                    type: 'function',
+                    function: {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.inputSchema,
+                    },
+                }));
+                body.tool_choice = 'auto';
+            }
 
             const headers: Record<string, string> = {
                 'Content-Type': 'application/json',
@@ -95,6 +106,7 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let toolCallsBuffer: any[] = [];
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -125,6 +137,36 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
                         const contentDelta = delta.content;
                         if (contentDelta) {
                             onEvent({ type: 'text', data: contentDelta });
+                        }
+
+                        const toolCallsDelta = delta.tool_calls;
+                        if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
+                            for (const tc of toolCallsDelta) {
+                                if (tc.function?.name) console.log(`[OpenCodeDirect] TOOL_CALL detected: name=${tc.function.name}, idx=${tc.index}`);
+                                const idx = tc.index ?? 0;
+                                while (toolCallsBuffer.length <= idx) {
+                                    toolCallsBuffer.push({ id: '', name: '', arguments: '' });
+                                }
+                                const entry = toolCallsBuffer[idx];
+                                if (tc.id) entry.id = tc.id;
+                                if (tc.type) entry.type = tc.type;
+                                if (tc.function) {
+                                    if (tc.function.name) {
+                                        entry.name = tc.function.name;
+                                        onEvent({
+                                            type: 'tool_call_start',
+                                            data: { id: entry.id || `call-${idx}`, name: entry.name },
+                                        });
+                                    }
+                                    if (tc.function.arguments) {
+                                        entry.arguments += tc.function.arguments;
+                                        onEvent({
+                                            type: 'tool_call_chunk',
+                                            data: tc.function.arguments,
+                                        });
+                                    }
+                                }
+                            }
                         }
                     } catch {
                         // Skip malformed JSON lines

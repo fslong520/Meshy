@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { sendRpc, useEvent } from '../store/ws'
-import { Settings, Plus, MessageSquare, Trash2 } from 'lucide-react'
+import { Settings, Plus, MessageSquare, Trash2, Pencil, FolderOpen, Check, X } from 'lucide-react'
 
 interface SessionInfo {
     id: string;
@@ -9,6 +9,14 @@ interface SessionInfo {
     updatedAt: string;
     goal: string;
     messageCount: number;
+}
+
+interface ContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    sessionId: string;
+    sessionTitle?: string;
 }
 
 interface Props {
@@ -23,6 +31,17 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
     // Removed local activeSession state
     const [workspaces, setWorkspaces] = useState<string[]>([])
     const [activeWorkspace, setActiveWorkspace] = useState<string>('')
+    const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        sessionId: '',
+        sessionTitle: ''
+    })
+    const contextMenuRef = useRef<HTMLDivElement>(null)
+    const [showAddWorkspace, setShowAddWorkspace] = useState(false)
+    const [newWorkspacePath, setNewWorkspacePath] = useState('')
+    const addWsInputRef = useRef<HTMLInputElement>(null)
 
     const refreshSessions = useCallback(() => {
         sendRpc<{ sessions: SessionInfo[] }>('session:list').then((res) => {
@@ -65,6 +84,61 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
         })
     }, [onSessionSwitch])
 
+    const handleContextMenu = useCallback((e: React.MouseEvent, session: SessionInfo) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setContextMenu({
+            visible: true,
+            x: e.clientX,
+            y: e.clientY,
+            sessionId: session.id,
+            sessionTitle: session.title || session.goal || ''
+        })
+    }, [])
+
+    const closeContextMenu = useCallback(() => {
+        setContextMenu(prev => ({ ...prev, visible: false }))
+    }, [])
+
+    const handleRenameSession = useCallback(async () => {
+        const newTitle = window.prompt('请输入新的会话名称：', contextMenu.sessionTitle || '')
+        if (newTitle === null) return // 用户取消
+        if (newTitle.trim() === '') {
+            alert('会话名称不能为空')
+            return
+        }
+        
+        try {
+            const res = await sendRpc<{ success: boolean; session?: SessionInfo }>('session:rename', {
+                id: contextMenu.sessionId,
+                title: newTitle.trim()
+            })
+            if (res && res.success !== false) {
+                refreshSessions()
+            } else {
+                throw new Error('重命名失败')
+            }
+        } catch (err: any) {
+            alert(`重命名失败: ${err.message}`)
+        } finally {
+            closeContextMenu()
+        }
+    }, [contextMenu.sessionId, contextMenu.sessionTitle, closeContextMenu])
+
+    // 点击其他地方关闭右键菜单
+    useEffect(() => {
+        const handleClickOutside = () => {
+            if (contextMenu.visible) {
+                closeContextMenu()
+            }
+        }
+        
+        if (contextMenu.visible) {
+            document.addEventListener('click', handleClickOutside)
+            return () => document.removeEventListener('click', handleClickOutside)
+        }
+    }, [contextMenu.visible, closeContextMenu])
+
   const handleSwitchSession = useCallback((sessionId: string, title?: string) => {
     onSessionSwitch?.(sessionId, title)
   }, [onSessionSwitch])
@@ -97,30 +171,47 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
 
     const handleWorkspaceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const val = e.target.value
-        if (val === '__add_new__') {
-            const newPath = window.prompt('Enter absolute path to new workspace directory:')
-            if (newPath) {
-                const res = await sendRpc<{ success: boolean; error?: string }>('workspace:add', { path: newPath })
-                if (res.success) {
-                    refreshWorkspaces()
-                } else {
-                    alert(`Failed to add workspace: ${res.error}`)
-                }
-            }
-            // Reset select back to current active workspace
-            e.target.value = activeWorkspace
-            return
-        }
-
+        if (val === '__add_new__') return
         const res = await sendRpc<{ success: boolean; sessionId: string; error?: string }>('workspace:switch', { targetPath: val })
         if (res.success) {
             setActiveWorkspace(val)
             refreshSessions()
-            onSessionSwitch?.(res.sessionId) // Triggers App to update activeSessionId
+            onSessionSwitch?.(res.sessionId)
         } else {
             alert(`Failed to switch workspace: ${res.error}`)
         }
     }
+
+    const handleAddWorkspace = useCallback(async () => {
+        try {
+            const dirHandle = await (window as any).showDirectoryPicker()
+            setNewWorkspacePath(dirHandle.name)
+            setShowAddWorkspace(true)
+            setTimeout(() => addWsInputRef.current?.focus(), 50)
+        } catch {
+            setNewWorkspacePath('')
+            setShowAddWorkspace(true)
+            setTimeout(() => addWsInputRef.current?.focus(), 50)
+        }
+    }, [])
+
+    const handleConfirmAddWorkspace = useCallback(async () => {
+        const path = newWorkspacePath.trim()
+        if (!path) return
+        const res = await sendRpc<{ success: boolean; error?: string }>('workspace:add', { path })
+        if (res.success) {
+            refreshWorkspaces()
+            setShowAddWorkspace(false)
+            setNewWorkspacePath('')
+        } else {
+            alert(`Failed to add workspace: ${res.error}`)
+        }
+    }, [newWorkspacePath, refreshWorkspaces])
+
+    const handleCancelAddWorkspace = useCallback(() => {
+        setShowAddWorkspace(false)
+        setNewWorkspacePath('')
+    }, [])
 
     return (
         <div className="left-sidebar">
@@ -139,35 +230,56 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
                         {workspaces.map(w => (
                             <option key={w} value={w}>{w}</option>
                         ))}
-                        <option value="__add_new__">+ Add Workspace...</option>
                     </select>
+                    <button
+                        className="ws-add-btn"
+                        title="Add workspace"
+                        onClick={handleAddWorkspace}
+                    >
+                        <FolderOpen size={14} />
+                    </button>
                     {activeWorkspace && (
                         <button
-                            className="icon-button"
-                            title="Delete this workspace"
+                            className="ws-remove-btn"
+                            title="Remove this workspace"
                             onClick={async () => {
-                                if (window.confirm(`Are you sure you want to remove workspace: ${activeWorkspace}?`)) {
+                                if (window.confirm(`Remove workspace "${activeWorkspace}"?`)) {
                                     const res = await sendRpc<{ success: boolean; error?: string }>('workspace:remove', { path: activeWorkspace })
-                                    if (res.success) {
-                                        refreshWorkspaces()
-                                    } else {
-                                        alert(`Failed to remove workspace: ${res.error}`)
-                                    }
+                                    if (res.success) refreshWorkspaces()
+                                    else alert(`Failed: ${res.error}`)
                                 }
                             }}
-                            style={{
-                                padding: '4px 8px',
-                                background: 'transparent',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                color: 'var(--text-muted)'
-                            }}
                         >
-                            ✕
+                            <X size={14} />
                         </button>
                     )}
                 </div>
+                {showAddWorkspace && (
+                    <div style={{ display: 'flex', gap: '4px', marginTop: 6 }}>
+                        <input
+                            ref={addWsInputRef}
+                            type="text"
+                            value={newWorkspacePath}
+                            onChange={(e) => setNewWorkspacePath(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmAddWorkspace(); if (e.key === 'Escape') handleCancelAddWorkspace() }}
+                            placeholder="Paste or type workspace path..."
+                            style={{
+                                flex: 1,
+                                padding: '6px 8px',
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--accent)',
+                                background: 'var(--bg-tertiary)',
+                                color: 'var(--text-primary)',
+                                fontSize: '12px',
+                                fontFamily: 'var(--font-mono)',
+                                outline: 'none',
+                            }}
+                        />
+                        <button className="ws-confirm-btn" onClick={handleConfirmAddWorkspace} title="Confirm">
+                            <Check size={14} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Sessions */}
@@ -185,6 +297,7 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
                         key={s.id}
                         className={`session-item ${activeSessionId === s.id ? 'active' : ''}`}
                         onClick={() => handleSwitchSession(s.id, s.title)}
+                        onContextMenu={(e) => handleContextMenu(e, s)}
                         title={`${s.title || s.goal || s.id}\n${formatTime(s.updatedAt)}`}
                     >
                         <MessageSquare size={14} />
@@ -206,6 +319,39 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
                     </div>
                 ))}
             </div>
+
+            {/* 右键菜单 */}
+            {contextMenu.visible && (
+                <div
+                    ref={contextMenuRef}
+                    className="context-menu"
+                    style={{
+                        position: 'fixed',
+                        left: `${contextMenu.x}px`,
+                        top: `${contextMenu.y}px`,
+                        zIndex: 1000,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div
+                        className="context-menu-item"
+                        onClick={handleRenameSession}
+                    >
+                        <Pencil size={14} />
+                        <span>重命名</span>
+                    </div>
+                    <div
+                        className="context-menu-item danger"
+                        onClick={(e) => {
+                            handleDeleteSession(e as any, contextMenu.sessionId)
+                            closeContextMenu()
+                        }}
+                    >
+                        <Trash2 size={14} />
+                        <span>删除</span>
+                    </div>
+                </div>
+            )}
 
             <button className="new-session-btn" onClick={handleNewSession}>
                 <Plus size={14} style={{ marginRight: 4 }} /> New Session

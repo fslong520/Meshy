@@ -418,7 +418,7 @@ export function ChatPanel({ messages, onApproval, activeSession, onSessionAction
                                             <div className="tool-block-body" onClick={(e) => e.stopPropagation()}>
                                                 <ToolPolicyDecisionBadge decision={tc.policyDecision} />
                                                 <div className="arg-box"><strong>Input:</strong> {tc.args}</div>
-                                                {tc.result && <div className="result-box"><strong>Output:</strong> {tc.result}</div>}
+                                                {tc.result && <div className="result-box"><strong>Output:</strong> {typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2)}</div>}
                                             </div>
                                         )}
                                     </div>

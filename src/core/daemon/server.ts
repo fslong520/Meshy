@@ -70,6 +70,9 @@ export type DaemonEventType =
     | 'approval:request'      // 沙盒审批请求（等待人类确认）
     | 'session:update'        // Session 状态变更
     | 'workspace:list'        // 工作区列表
+    | 'workspace:add'         // 添加工作区
+    | 'workspace:remove'      // 移除工作区
+    | 'workspace:switch'      // 切换工作区
     | 'session:list'          // 会话列表
     | 'router:decision';      // 路由决策通知
 
@@ -467,6 +470,24 @@ export class DaemonServer extends EventEmitter {
 
             case 'workspace:list': {
                 this.emit('workspace:list', ws, msg.id);
+                break;
+            }
+
+            case 'workspace:add': {
+                const path = (msg.params as any)?.path as string;
+                this.emit('workspace:add', path, ws, msg.id);
+                break;
+            }
+
+            case 'workspace:remove': {
+                const path = (msg.params as any)?.path as string;
+                this.emit('workspace:remove', path, ws, msg.id);
+                break;
+            }
+
+            case 'workspace:switch': {
+                const targetPath = (msg.params as any)?.path || (msg.params as any)?.targetPath as string;
+                this.emit('workspace:switch', targetPath, ws, msg.id);
                 break;
             }
 

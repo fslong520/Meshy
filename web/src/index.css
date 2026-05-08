@@ -1865,3 +1865,73 @@ option {
   color: var(--error, #f87171);
   background: rgba(248, 113, 113, 0.1);
 }
+
+/* ─── Context Menu (右键菜单) ─── */
+.context-menu {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  min-width: 160px;
+  backdrop-filter: blur(12px);
+  animation: fadeIn 0.15s ease;
+  z-index: 1000;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.context-menu-item:hover svg {
+  color: var(--accent);
+}
+
+.context-menu-item.danger {
+  color: var(--error);
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(248, 113, 113, 0.1);
+  color: #ff3e3e;
+}
+
+.context-menu-item.danger:hover svg {
+  color: #ff3e3e;
+}
+
+/* ─── Workspace 添加/删除按钮 ─── */
+.ws-add-btn,
+.ws-remove-btn,
+.ws-confirm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.ws-add-btn:hover { color: var(--accent); border-color: var(--accent); }
+.ws-remove-btn:hover { color: var(--error); border-color: var(--error); }
+.ws-confirm-btn:hover { color: var(--accent); border-color: var(--accent); }

@@ -346,7 +346,8 @@ function App() {
     }
     const toolName = data.name || data.tool || 'unknown_tool'
     const isError = data.isError ?? (data.success === false)
-    const resultText = data.result ?? (isError ? 'Tool execution failed.' : 'Tool execution completed.')
+    const rawResult = data.result;
+    const resultText: string = typeof rawResult === 'string' ? rawResult : (rawResult ? JSON.stringify(rawResult, null, 2) : (isError ? 'Tool execution failed.' : 'Tool execution completed.'))
 
     setMessages((prev) => {
       const { list, agent } = ensureAgentContainer(prev)
