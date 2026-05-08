@@ -619,7 +619,7 @@ export class TaskEngine {
                             : `Mode: ${command.type}`;
                     this.addMessageAndAppend({ role: 'user', content: command.args });
 
-                    const decision = await this.router.classify(command.args);
+                    const decision = await this.router.classify(command.args, isLocalModel);
                     const catalogAdvert = this.toolRegistry.getCatalog().getAdvertText();
 
                     // 补充 MCP 广告
@@ -727,6 +727,8 @@ export class TaskEngine {
         if (context?.maxTokens !== undefined) this.modelParams.maxTokens = context.maxTokens;
         if (context?.topP !== undefined) this.modelParams.topP = context.topP;
 
+        const isLocalModel = this.providerResolver.getActiveDefault().includes('_local_');
+
         // Phase 4: 初始化记忆库
         await this.workspace.memoryStore.initialize();
 
@@ -778,7 +780,7 @@ export class TaskEngine {
                     this.addMessageAndAppend({ role: 'user', content: finalContent });
 
                     // 使用命令绑定的模型或默认模型
-                    const decision = await this.router.classify(renderedPrompt);
+                    const decision = await this.router.classify(renderedPrompt, isLocalModel);
                     const builder = new SystemPromptBuilder(BASE_SYSTEM_PROMPT)
                         .withRoutingHint(decision.systemPromptHint);
 
@@ -828,7 +830,6 @@ export class TaskEngine {
         this.addMessageAndAppend({ role: 'user', content: finalContent });
 
         // ── Phase 2: 意图路由（使用清洗后的文本） ──
-        const isLocalModel = this.providerResolver.getActiveDefault().includes('_local_');
         const decision = await this.router.classify(parsed.cleanText, isLocalModel);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
@@ -1031,6 +1032,7 @@ export class TaskEngine {
      * 中断当前的 LLM 任务执行。
      */
     public interrupt(): void {
+        this.messageQueue.length = 0;
         if (this.abortController) {
             this.abortController.abort();
             this.abortController = null;
@@ -1197,6 +1199,7 @@ export class TaskEngine {
                     }
                     const pendingToolCalls: PendingToolCall[] = [];
                     let fullResponseText = '';
+                    let fullReasoningContent = '';
 
                     const responseMsgId = `msg-${Date.now()}`;
 
@@ -1220,6 +1223,7 @@ export class TaskEngine {
                                 stream: normalizedEvent,
                             });
                         } else if (event.type === 'reasoning_chunk') {
+                            fullReasoningContent += event.data;
                             this.daemon?.broadcast('agent:reasoning', {
                                 text: event.data,
                                 id: responseMsgId,
@@ -1255,13 +1259,13 @@ export class TaskEngine {
                                 id: responseMsgId,
                             });
                         }
-                    });
+                    }, this.abortController.signal);
 
                     console.log(`[Engine] Stream done. isDone=${isDone}, pendingToolCalls=${pendingToolCalls.length}, fullResponseText.length=${fullResponseText.length}, loopCount=${loopCount}`);
 
                     if (pendingToolCalls.length === 0) {
                         console.log(`[Engine] No tool calls → setting isDone=true and BREAKING. Loop exits after ${loopCount} iterations.`);
-                        this.addMessageAndAppend({ role: 'assitant', content: fullResponseText });
+                        this.addMessageAndAppend({ role: 'assitant', content: fullResponseText, reasoningContent: fullReasoningContent || undefined });
                         isDone = true;
                         break;
                     }
@@ -1274,6 +1278,7 @@ export class TaskEngine {
                         const parsedArgs = call.rawArgs ? JSON.parse(call.rawArgs) : {};
                         this.addMessageAndAppend({
                             role: 'assistant',
+                            reasoningContent: fullReasoningContent || undefined,
                             content: {
                                 type: 'tool_call',
                                 id: call.id,

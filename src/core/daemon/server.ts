@@ -342,7 +342,7 @@ export class DaemonServer extends EventEmitter {
                 const approvalId = (msg.params?.id || msg.params?.approvalId) as string;
                 let answer = msg.params?.answer as string;
                 if (msg.params?.approved !== undefined) {
-                    answer = msg.params?.approved ? 'y' : 'n';
+                    answer = msg.params?.approved ? 'yes' : 'no';
                 }
                 const resolve = this.pendingApprovals.get(approvalId);
                 if (resolve) {

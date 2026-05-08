@@ -206,10 +206,14 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
             if (!msg.content) continue;
 
             if (typeof msg.content === 'string') {
-                messages.push({
+                const item: any = {
                     role: msg.role === 'assistant' ? 'assistant' : 'user',
                     content: msg.content,
-                });
+                };
+                if ((msg as any).reasoningContent) {
+                    item.reasoning_content = (msg as any).reasoningContent;
+                }
+                messages.push(item);
             } else if (Array.isArray(msg.content)) {
                 const textParts = msg.content
                     .filter(p => p.type === 'text')
@@ -221,7 +225,7 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
                 });
             } else if ((msg.content as any)?.type === 'tool_call') {
                 const tc = msg.content as any;
-                messages.push({
+                const item: any = {
                     role: 'assistant',
                     content: null,
                     tool_calls: [{
@@ -234,7 +238,11 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
                                 : JSON.stringify(tc.arguments || {}),
                         },
                     }],
-                });
+                };
+                if ((msg as any).reasoningContent) {
+                    item.reasoning_content = (msg as any).reasoningContent;
+                }
+                messages.push(item);
             } else if ((msg.content as any)?.type === 'tool_result') {
                 const tr = msg.content as any;
                 messages.push({
@@ -251,31 +259,49 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
         }
 
         const cleaned: any[] = [];
-        let pendingToolCalls: string[] = [];
+        const pendingToolCalls: { id: string; msgIdx: number }[] = [];
         for (const m of messages) {
             if (m.role === 'tool') {
-                const matched = pendingToolCalls.indexOf(m.tool_call_id);
-                if (matched >= 0) {
-                    pendingToolCalls.splice(matched, 1);
+                const idx = pendingToolCalls.findIndex(p => p.id === m.tool_call_id);
+                if (idx >= 0) {
+                    pendingToolCalls.splice(idx, 1);
                     cleaned.push(m);
                 }
                 continue;
             }
             if (m.tool_calls && m.tool_calls.length > 0) {
-                for (const tc of m.tool_calls) {
-                    pendingToolCalls.push(tc.id);
+                const last = cleaned.length > 0 ? cleaned[cleaned.length - 1] : null;
+                if (last && last.role === 'assistant' && last.tool_calls) {
+                    for (const tc of m.tool_calls) {
+                        last.tool_calls.push(tc);
+                        pendingToolCalls.push({ id: tc.id, msgIdx: cleaned.length - 1 });
+                    }
+                } else {
+                    const msgIdx = cleaned.length;
+                    cleaned.push(m);
+                    for (const tc of m.tool_calls) {
+                        pendingToolCalls.push({ id: tc.id, msgIdx });
+                    }
                 }
-                cleaned.push(m);
                 continue;
             }
             if (pendingToolCalls.length > 0) {
-                const dropped = pendingToolCalls.splice(0, pendingToolCalls.length);
-                console.warn(`[OpenCodeDirect] Dropped ${dropped.length} orphaned tool calls: ${dropped.join(', ')}`);
+                const orphans = new Set(pendingToolCalls.map(p => p.msgIdx));
+                console.warn(`[OpenCodeDirect] Removing ${orphans.size} orphaned tool-call messages (${pendingToolCalls.length} calls)`);
+                for (let i = cleaned.length - 1; i >= 0; i--) {
+                    if (orphans.has(i)) cleaned.splice(i, 1);
+                }
+                pendingToolCalls.length = 0;
             }
             cleaned.push(m);
         }
         if (pendingToolCalls.length > 0) {
-            console.warn(`[OpenCodeDirect] Dropped ${pendingToolCalls.length} unresolved tool calls from tail: ${pendingToolCalls.join(', ')}`);
+            const orphans = new Set(pendingToolCalls.map(p => p.msgIdx));
+            console.warn(`[OpenCodeDirect] Removing ${orphans.size} trailing orphaned tool-call messages`);
+            for (let i = cleaned.length - 1; i >= 0; i--) {
+                if (orphans.has(i)) cleaned.splice(i, 1);
+            }
+            pendingToolCalls.length = 0;
         }
 
         return cleaned;
