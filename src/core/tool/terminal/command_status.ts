@@ -9,7 +9,7 @@ export const CommandStatusTool = defineTool('command_status', {
     ].join('\n'),
     parameters: z.object({
         CommandId: z.string().describe('ID of the command to get status for.'),
-        OutputCharacterCount: z.number().describe('Number of characters to load from the recent log buffer. Max is usually 10000.').optional()
+        OutputCharacterCount: z.coerce.number().describe('Number of characters to load from the recent log buffer. Max is usually 10000.').optional()
     }),
     async execute(params) {
         const status = terminalManager.getProcessStatus(params.CommandId);

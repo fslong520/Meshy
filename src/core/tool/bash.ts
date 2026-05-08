@@ -31,7 +31,7 @@ export const BashTool = defineTool('bash', {
     ].join('\n'),
     parameters: z.object({
         command: z.string().describe('The command to execute'),
-        timeout: z.number().describe('Optional timeout in milliseconds').optional(),
+        timeout: z.coerce.number().describe('Optional timeout in milliseconds').optional(),
         workdir: z.string().describe('The working directory. Defaults to workspace root. Use this instead of cd.').optional(),
         description: z.string().describe('A clear, concise description of what this command does in 5-10 words'),
     }),

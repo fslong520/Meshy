@@ -195,10 +195,13 @@ export class TaskEngine {
         // ── openKylin ERNIE-4.5-0.3B 本地小模型意图分类引擎 ──
         // 当配置启用且 Python 环境可用时，自动初始化本地小模型。
         // 小模型专用于意图分类，不参与大模型的生成任务。
-        if (config.models.local?.enabled !== false) {
+            if (config.models.local?.enabled !== false) {
             try {
                 this.localERNIE = new LocalERNIEAdapter();
-                console.log('[Engine] LocalERNIEAdapter initialized for intent classification.');
+                console.log('[Engine] LocalERNIEAdapter initialized, starting preload in background...');
+                this.localERNIE.preload().catch((err: any) => {
+                    console.warn(`[Engine] LocalERNIEAdapter preload failed: ${err.message}`);
+                });
             } catch (err: any) {
                 console.warn(`[Engine] Failed to initialize LocalERNIEAdapter: ${err.message}. Will use keyword + remote LLM fallback.`);
                 this.localERNIE = null;
@@ -825,7 +828,8 @@ export class TaskEngine {
         this.addMessageAndAppend({ role: 'user', content: finalContent });
 
         // ── Phase 2: 意图路由（使用清洗后的文本） ──
-        const decision = await this.router.classify(parsed.cleanText);
+        const isLocalModel = this.providerResolver.getActiveDefault().includes('_local_');
+        const decision = await this.router.classify(parsed.cleanText, isLocalModel);
         console.log(`[Router] Intent: ${decision.intent} | Tier: ${decision.modelTier} | Confidence: ${decision.confidence.toFixed(2)}`);
 
         // ── Phase 4: 🧠 忆时增强 — 类人记忆检索与涌现 ──

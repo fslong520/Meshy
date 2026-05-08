@@ -509,8 +509,8 @@ export async function runServer(port: number) {
         daemon,
     });
 
-    // Restore persisted tool policy mode from session snapshot.
-    engine.getToolRegistry().setPolicyMode(session.toolPolicyMode ?? 'standard');
+    const restoredMode = session.toolPolicyMode;
+    engine.getToolRegistry().setPolicyMode(restoredMode === 'read_only' ? 'standard' : (restoredMode || 'standard'));
 
     const harnessAdapter = new HarnessServerAdapter(activeWorkspace.rootPath);
     const pluginRoot = path.join(activeWorkspace.rootPath, '.meshy', 'plugins');

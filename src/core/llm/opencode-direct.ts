@@ -94,8 +94,13 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
             });
 
             if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                const errMsg = (errData as any).error?.message || `HTTP ${response.status}`;
+                const rawBody = await response.text().catch(() => '');
+                console.error(`[OpenCodeDirect] HTTP ${response.status} Error:`, rawBody.slice(0, 500));
+                let errMsg = `HTTP ${response.status}`;
+                try {
+                    const errData = JSON.parse(rawBody);
+                    errMsg = errData.error?.message || errMsg;
+                } catch {}
                 throw new Error(errMsg);
             }
 
@@ -197,7 +202,8 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
         }
 
         for (const msg of prompt.messages) {
-            if (msg.role === 'system') continue; // Already handled above
+            if (msg.role === 'system') continue;
+            if (!msg.content) continue;
 
             if (typeof msg.content === 'string') {
                 messages.push({
@@ -205,7 +211,6 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
                     content: msg.content,
                 });
             } else if (Array.isArray(msg.content)) {
-                // Multi-part content (text + images) — simplified to just text
                 const textParts = msg.content
                     .filter(p => p.type === 'text')
                     .map(p => p.text || '')
@@ -245,6 +250,34 @@ export class OpenCodeDirectAdapter implements ILLMProvider {
             }
         }
 
-        return messages;
+        const cleaned: any[] = [];
+        let pendingToolCalls: string[] = [];
+        for (const m of messages) {
+            if (m.role === 'tool') {
+                const matched = pendingToolCalls.indexOf(m.tool_call_id);
+                if (matched >= 0) {
+                    pendingToolCalls.splice(matched, 1);
+                    cleaned.push(m);
+                }
+                continue;
+            }
+            if (m.tool_calls && m.tool_calls.length > 0) {
+                for (const tc of m.tool_calls) {
+                    pendingToolCalls.push(tc.id);
+                }
+                cleaned.push(m);
+                continue;
+            }
+            if (pendingToolCalls.length > 0) {
+                const dropped = pendingToolCalls.splice(0, pendingToolCalls.length);
+                console.warn(`[OpenCodeDirect] Dropped ${dropped.length} orphaned tool calls: ${dropped.join(', ')}`);
+            }
+            cleaned.push(m);
+        }
+        if (pendingToolCalls.length > 0) {
+            console.warn(`[OpenCodeDirect] Dropped ${pendingToolCalls.length} unresolved tool calls from tail: ${pendingToolCalls.join(', ')}`);
+        }
+
+        return cleaned;
     }
 }

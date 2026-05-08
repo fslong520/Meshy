@@ -172,17 +172,14 @@ export class IntentRouter {
      *                                        → 否 → 远程 LLM 分类（如果有）
      *                                              → 否 → 返回 keyword 结果
      */
-    public async classify(userInput: string): Promise<RoutingDecision> {
-        // 第一层：纯关键词匹配（零成本）
+    public async classify(userInput: string, useLocalModel = true): Promise<RoutingDecision> {
         const localResult = classifyByKeywords(userInput);
 
-        // 如果本地判定置信度足够，直接返回
         if (localResult.confidence >= 0.3) {
             return localResult;
         }
 
-        // 第二层：使用 ERNIE-4.5-0.3B 本地小模型进行深度分析
-        if (this.localERNIE) {
+        if (useLocalModel && this.localERNIE) {
             try {
                 const ernieResult = await this.localERNIE.classifyIntent(
                     userInput,

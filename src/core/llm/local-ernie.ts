@@ -150,6 +150,13 @@ export class LocalERNIEAdapter implements ILLMProvider {
         return _.startPromise;
     }
 
+    /**
+     * 后台预加载模型（fire-and-forget），应在应用启动时调用
+     */
+    public preload(): Promise<void> {
+        return this.ensureStarted();
+    }
+
     private _startProcess(): Promise<void> {
         const _ = this._delegate();
         return new Promise((resolve, reject) => {
