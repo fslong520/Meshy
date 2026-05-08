@@ -338,7 +338,7 @@ export class DaemonServer extends EventEmitter {
             }
 
             case 'approval:response':
-            case 'approval:respond': { // 兼容旧版本
+            case 'approval:respond': {
                 const approvalId = (msg.params?.id || msg.params?.approvalId) as string;
                 let answer = msg.params?.answer as string;
                 if (msg.params?.approved !== undefined) {
@@ -348,7 +348,10 @@ export class DaemonServer extends EventEmitter {
                 if (resolve) {
                     resolve(answer);
                     this.pendingApprovals.delete(approvalId);
+                } else {
+                    console.warn(`[Daemon] approval:response — ID not found or already resolved: "${approvalId}"`);
                 }
+                this.sendResponse(ws, msg.id, { success: true });
                 break;
             }
 
