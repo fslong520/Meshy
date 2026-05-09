@@ -3,6 +3,10 @@ import { ProviderResolver } from '../llm/resolver.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+
+const SYSTEM_DIRS = ['.git', '.meshy', 'node_modules', '__pycache__', '.svn', '.hg', 'dist', 'build', '.next', '.nuxt', 'coverage', '.cache'];
+const HIDDEN_DIRS = ['.', '..'];
+
 export class WorkspaceManager {
     private workspaces: Map<string, Workspace> = new Map();
     private providerResolver: ProviderResolver;
@@ -13,6 +17,36 @@ export class WorkspaceManager {
         this.providerResolver = providerResolver;
         this.registryPath = path.join(os.homedir(), '.meshy', 'workspaces.json');
         this.loadPersistedWorkspaces();
+    }
+
+    private isSystemDir(dirName: string): boolean {
+        return SYSTEM_DIRS.includes(dirName) || dirName.startsWith('.');
+    }
+
+    private isValidWorkspaceDir(dirPath: string): boolean {
+        try {
+            const dirName = path.basename(dirPath);
+            if (this.isSystemDir(dirName)) {
+                return false;
+            }
+            
+            // 检查目录是否可读
+            if (!fs.existsSync(dirPath)) {
+                return false;
+            }
+            
+            const stat = fs.statSync(dirPath);
+            if (!stat.isDirectory()) {
+                return false;
+            }
+            
+            // 尝试读取目录（验证访问权限）
+            fs.readdirSync(dirPath);
+            
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     private loadPersistedWorkspaces() {
@@ -61,6 +95,16 @@ export class WorkspaceManager {
 
     public addWorkspace(rootPath: string): void {
         const resolvedPath = path.resolve(rootPath);
+        
+        // 验证路径是否为有效的工作区目录
+        if (!this.isValidWorkspaceDir(resolvedPath)) {
+            const dirName = path.basename(resolvedPath);
+            if (this.isSystemDir(dirName)) {
+                throw new Error(`Cannot add system directory "${dirName}" as workspace. Only regular project directories are allowed.`);
+            }
+            throw new Error(`Directory "${resolvedPath}" is not accessible or does not exist.`);
+        }
+        
         if (!this.persistedWorkspaces.includes(resolvedPath)) {
             this.persistedWorkspaces.push(resolvedPath);
             this.savePersistedWorkspaces();

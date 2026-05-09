@@ -182,13 +182,45 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
         }
     }
 
-    const handleAddWorkspace = useCallback(async () => {
+    // 系统目录列表（不能作为工作区）
+const SYSTEM_DIRS = [
+    '.git', '.meshy', 'node_modules', '__pycache__', '.svn', '.hg',
+    'dist', 'build', '.next', '.nuxt', 'coverage', '.cache',
+    'System Volume Information', '$RECYCLE.BIN', 'Windows', 'Program Files',
+    'Program Files (x86)', 'AppData', 'Local', 'Roaming'
+]
+
+function isSystemDir(pathName: string): boolean {
+    const name = pathName.replace(/\\/g, '/').split('/').pop() || ''
+    return SYSTEM_DIRS.some(sys => 
+        name === sys || name.startsWith('.') || name.endsWith('~')
+    )
+}
+
+const handleAddWorkspace = useCallback(async () => {
+        // 仅在 Electron 环境中可用，直接获取完整文件系统路径
+        const electronAPI = (window as any).electronAPI
+        if (!electronAPI?.openDirectory) {
+            alert('此功能需要 Electron 桌面客户端。\n请使用桌面版 Meshy 打开。')
+            return
+        }
+
         try {
-            const dirHandle = await (window as any).showDirectoryPicker()
-            setNewWorkspacePath(dirHandle.name)
+            const result = await electronAPI.openDirectory()
+            if (result.canceled || !result.path) {
+                if (result.error) alert(result.error)
+                return
+            }
+
+            // 使用 Electron 返回的完整绝对路径
+            const realPath = result.path
+            setNewWorkspacePath(realPath)
+            ;(window as any).__pendingDirPath = realPath
             setShowAddWorkspace(true)
             setTimeout(() => addWsInputRef.current?.focus(), 50)
-        } catch {
+        } catch (err) {
+            console.error('[Workspace] Failed to open directory dialog:', err)
+            alert('打开目录对话框失败，请手动输入路径。')
             setNewWorkspacePath('')
             setShowAddWorkspace(true)
             setTimeout(() => addWsInputRef.current?.focus(), 50)
@@ -196,15 +228,35 @@ export function LeftSidebar({ connected, activeSessionId, onSessionSwitch, onSet
     }, [])
 
     const handleConfirmAddWorkspace = useCallback(async () => {
-        const path = newWorkspacePath.trim()
-        if (!path) return
-        const res = await sendRpc<{ success: boolean; error?: string }>('workspace:add', { path })
+        const inputPath = newWorkspacePath.trim()
+        if (!inputPath) return
+        
+        // 验证是否为系统目录
+        if (isSystemDir(inputPath)) {
+            const dirName = inputPath.replace(/\\/g, '/').split('/').pop() || inputPath
+            alert(`无法添加系统目录 "${dirName}" 作为工作区。`)
+            return
+        }
+        
+        // Electron 环境用 verifyDir 验证路径可用性
+        const electronAPI = (window as any).electronAPI
+        if (electronAPI?.fs?.verifyDir) {
+            const result = await electronAPI.fs.verifyDir(inputPath)
+            if (!result.valid) {
+                alert(`目录不可用: ${result.error}\n请选择正确的项目目录。`)
+                return
+            }
+        }
+        
+        // 直接使用完整路径
+        const res = await sendRpc<{ success: boolean; error?: string }>('workspace:add', { path: inputPath })
         if (res.success) {
             refreshWorkspaces()
             setShowAddWorkspace(false)
             setNewWorkspacePath('')
+            ;(window as any).__pendingDirPath = null
         } else {
-            alert(`Failed to add workspace: ${res.error}`)
+            alert(`添加工作区失败: ${res.error}`)
         }
     }, [newWorkspacePath, refreshWorkspaces])
 
