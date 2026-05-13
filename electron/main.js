@@ -149,7 +149,10 @@ function createWindow() {
         : "http://localhost:".concat(WS_PORT);
     if (isDev) {
         mainWindow.loadURL(loadUrl);
-        mainWindow.webContents.openDevTools({ mode: 'bottom' });
+        // 默认不打开 DevTools，设置 MESHY_DEVTOOLS=1 或传 --dev 参数时才打开
+        if (process.env.MESHY_DEVTOOLS === '1') {
+            mainWindow.webContents.openDevTools({ mode: 'bottom' });
+        }
     }
     else {
         // 生产模式：先等后端服务器就绪

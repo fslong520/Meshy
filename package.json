@@ -11,6 +11,8 @@
     "dev": "tsx watch src/index.ts",
     "dev:electron": "npm run build:electron && electron electron/main.js",
     "dev:all": "bash dev.sh",
+    "desktop": "bash start-desktop.sh",
+    "desktop:dev": "bash start-desktop.sh --dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
